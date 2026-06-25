@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Study Reader</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="popup">
+      <header class="header">
+        <div>
+          <h1>Study Reader</h1>
+          <p id="status" class="status">Ready</p>
+        </div>
+      </header>
+
+      <section class="controls" aria-label="Reader controls">
+        <button id="readSelection" class="primary" type="button">Read Selection</button>
+        <button id="openPdfReader" type="button">Open PDF Reader</button>
+        <label class="file-button" for="openPdfFile">Open Local PDF</label>
+        <input id="openPdfFile" class="visually-hidden" type="file" accept="application/pdf,.pdf">
+        <div class="grid">
+          <button id="previous" type="button">Previous</button>
+          <button id="pause" type="button">Pause</button>
+          <button id="resume" type="button">Resume</button>
+          <button id="next" type="button">Next</button>
+        </div>
+        <button id="stop" class="danger" type="button">Stop</button>
+      </section>
+
+      <section class="settings" aria-label="Speech settings">
+        <label for="rate">Rate <span id="rateValue">1.0x</span></label>
+        <input id="rate" type="range" min="0.5" max="2" step="0.1" value="1">
+
+        <label for="voice">Voice</label>
+        <select id="voice">
+          <option value="">Default voice</option>
+        </select>
+      </section>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Study Reader PDF</title>
+    <link rel="stylesheet" href="pdf-reader.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="title">
+        <h1>Study Reader PDF</h1>
+        <p id="fileName">Open a local PDF to begin.</p>
+      </div>
+      <label class="file-control" for="pdfFile">Open PDF</label>
+      <input id="pdfFile" class="visually-hidden" type="file" accept="application/pdf,.pdf">
+    </header>
+
+    <main class="reader-shell">
+      <section class="pdf-pane" aria-label="PDF page">
+        <div class="page-toolbar">
+          <button id="previousPage" type="button">Previous Page</button>
+          <span id="pageStatus">No PDF loaded</span>
+          <button id="nextPage" type="button">Next Page</button>
+        </div>
+        <div id="canvasWrap" class="canvas-wrap">
+          <canvas id="pdfCanvas"></canvas>
+        </div>
+      </section>
+
+      <aside class="study-pane" aria-label="Reader controls and extracted text">
+        <section class="controls" aria-label="Speech controls">
+          <button id="play" class="primary" type="button">Play from Current Chunk</button>
+          <div class="control-grid">
+            <button id="previousSentence" type="button">Previous Sentence</button>
+            <button id="nextSentence" type="button">Next Sentence</button>
+            <button id="pause" type="button">Pause</button>
+            <button id="resume" type="button">Resume</button>
+          </div>
+          <button id="stop" class="danger" type="button">Stop</button>
+        </section>
+
+        <section class="settings" aria-label="Speech settings">
+          <label for="rate">Speed <span id="rateValue">1.0x</span></label>
+          <input id="rate" type="range" min="0.5" max="2" step="0.1" value="1">
+
+          <label for="voice">Voice</label>
+          <select id="voice">
+            <option value="">Default voice</option>
+          </select>
+        </section>
+
+        <section class="text-panel" aria-label="Extracted PDF text">
+          <div class="text-heading">
+            <h2>Page Text</h2>
+            <p id="readerStatus">Ready</p>
+          </div>
+          <div id="textChunks" class="text-chunks"></div>
+        </section>
+      </aside>
+    </main>
+
+    <script type="module" src="pdf-reader.mjs"></script>
+  </body>
+</html>

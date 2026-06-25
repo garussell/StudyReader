@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Study Reader",
+  "description": "Read selected webpage text or a clicked paragraph with sentence highlighting and study controls.",
+  "version": "0.1.0",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "action": {
+    "default_title": "Study Reader",
+    "default_popup": "src/popup.html"
+  },
+  "background": {
+    "service_worker": "src/background.js"
+  }
+}
