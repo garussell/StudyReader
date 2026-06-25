@@ -1,0 +1,21 @@
+{
+  "name": "studyreader",
+  "version": "1.0.0",
+  "description": "Manifest V3 Chrome extension for webpage and PDF text-to-speech study reading.",
+  "private": true,
+  "scripts": {
+    "vendor:pdfjs": "mkdir -p vendor/pdfjs && cp node_modules/pdfjs-dist/build/pdf.mjs vendor/pdfjs/pdf.mjs && cp node_modules/pdfjs-dist/build/pdf.worker.mjs vendor/pdfjs/pdf.worker.mjs",
+    "check": "node --check src/background.js && node --check src/popup.js && node --check src/content.js && node --check src/pdf-reader.mjs"
+  },
+  "keywords": [
+    "chrome-extension",
+    "text-to-speech",
+    "pdf"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "pdfjs-dist": "^6.0.227"
+  }
+}
