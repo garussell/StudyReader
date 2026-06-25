@@ -1,7 +1,26 @@
 const CONTENT_SCRIPT_FILE = "src/content.js";
+const CONTENT_PREFS_FILE = "src/shared-prefs.js";
+const CONTENT_SNIPPETS_FILE = "src/shared-snippets.js";
 const CONTENT_STYLE_FILE = "src/content.css";
+const SNIPPETS_STORAGE_KEY = "studyReaderSnippets";
+const SNIPPETS_MESSAGE_TYPES = new Set([
+  "SNIPPETS_GET",
+  "SNIPPETS_SAVE",
+  "SNIPPETS_UPDATE",
+  "SNIPPETS_DELETE",
+  "SNIPPETS_CLEAR",
+  "STUDY_READER_SNIPPETS_STORAGE"
+]);
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (SNIPPETS_MESSAGE_TYPES.has(message?.type)) {
+    handleSnippetStorageMessage(message)
+      .then((response) => sendResponse({ ok: true, ...response }))
+      .catch((error) => sendResponse({ ok: false, error: error.message }));
+
+    return true;
+  }
+
   if (!message || message.type !== "STUDY_READER_POPUP_COMMAND") {
     return false;
   }
@@ -12,6 +31,82 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   return true;
 });
+
+async function handleSnippetStorageMessage(message) {
+  if (!chrome?.storage?.local) {
+    throw new Error("Storage permission is missing. Check manifest.json for the storage permission.");
+  }
+
+  const stored = await chrome.storage.local.get({ [SNIPPETS_STORAGE_KEY]: [] });
+  const snippets = Array.isArray(stored[SNIPPETS_STORAGE_KEY]) ? stored[SNIPPETS_STORAGE_KEY] : [];
+
+  if (message.type === "SNIPPETS_GET" || message.action === "getSnippets") {
+    return { snippets };
+  }
+
+  if (message.type === "SNIPPETS_CLEAR" || message.action === "setSnippets") {
+    const nextSnippets = Array.isArray(message.snippets) ? message.snippets : [];
+    await chrome.storage.local.set({
+      [SNIPPETS_STORAGE_KEY]: nextSnippets
+    });
+    return { snippets: nextSnippets, updated: true };
+  }
+
+  if (message.type === "SNIPPETS_SAVE") {
+    const snippet = message.snippet || message.payload;
+    if (!snippet || typeof snippet !== "object") {
+      throw new Error("Snippet payload is missing.");
+    }
+
+    const duplicate = snippets.find((entry) => (
+      entry?.text === snippet.text
+      && entry?.sourceId === snippet.sourceId
+      && entry?.snippetType === snippet.snippetType
+    ));
+
+    if (duplicate) {
+      return {
+        saved: false,
+        duplicate: true,
+        snippet: duplicate,
+        snippets
+      };
+    }
+
+    const nextSnippets = [snippet, ...snippets];
+    await chrome.storage.local.set({ [SNIPPETS_STORAGE_KEY]: nextSnippets });
+    return {
+      saved: true,
+      duplicate: false,
+      snippet,
+      snippets: nextSnippets
+    };
+  }
+
+  if (message.type === "SNIPPETS_UPDATE") {
+    if (typeof message.id !== "string" || !message.id) {
+      throw new Error("Snippet id is required.");
+    }
+
+    const nextSnippets = snippets.map((snippet) => (
+      snippet?.id === message.id ? message.updates : snippet
+    ));
+    await chrome.storage.local.set({ [SNIPPETS_STORAGE_KEY]: nextSnippets });
+    return { snippets: nextSnippets, updated: true };
+  }
+
+  if (message.type === "SNIPPETS_DELETE") {
+    if (typeof message.id !== "string" || !message.id) {
+      throw new Error("Snippet id is required.");
+    }
+
+    const nextSnippets = snippets.filter((snippet) => snippet?.id !== message.id);
+    await chrome.storage.local.set({ [SNIPPETS_STORAGE_KEY]: nextSnippets });
+    return { snippets: nextSnippets, deleted: true };
+  }
+
+  throw new Error("Unknown snippets storage action.");
+}
 
 async function forwardToActiveTab(payload) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -47,6 +142,6 @@ async function ensureContentScript(tabId) {
 
   await chrome.scripting.executeScript({
     target: { tabId },
-    files: [CONTENT_SCRIPT_FILE]
+    files: [CONTENT_PREFS_FILE, CONTENT_SNIPPETS_FILE, CONTENT_SCRIPT_FILE]
   });
 }

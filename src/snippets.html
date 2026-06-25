@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Study Reader Saved PDF Snippets</title>
+    <link rel="stylesheet" href="snippets.css">
+  </head>
+  <body>
+    <main class="page">
+      <header class="page-header">
+        <div>
+          <h1>Study Reader Saved PDF Snippets</h1>
+          <p id="summary" class="summary">Loading PDF snippets...</p>
+        </div>
+        <div class="header-actions">
+          <button id="exportSnippets" class="primary" type="button">Export HTML</button>
+          <button id="clearSnippets" class="danger" type="button">Clear All</button>
+        </div>
+      </header>
+
+      <p id="status" class="status" aria-live="polite">Ready</p>
+      <section id="snippetList" class="snippet-list" aria-label="Saved PDF snippets"></section>
+    </main>
+
+    <script src="shared-snippets.js"></script>
+    <script src="snippets.js"></script>
+  </body>
+</html>

@@ -38,6 +38,12 @@ h1 {
   font-size: 12px;
 }
 
+.helper-text {
+  margin: -2px 0 0;
+  color: #607084;
+  font-size: 12px;
+}
+
 .controls,
 .settings {
   display: grid;

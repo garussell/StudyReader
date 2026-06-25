@@ -5,7 +5,7 @@
   "private": true,
   "scripts": {
     "vendor:pdfjs": "mkdir -p vendor/pdfjs && cp node_modules/pdfjs-dist/build/pdf.mjs vendor/pdfjs/pdf.mjs && cp node_modules/pdfjs-dist/build/pdf.worker.mjs vendor/pdfjs/pdf.worker.mjs",
-    "check": "node --check src/background.js && node --check src/popup.js && node --check src/content.js && node --check src/pdf-reader.mjs"
+    "check": "node --check src/background.js && node --check src/shared-prefs.js && node --check src/shared-snippets.js && node --check src/popup.js && node --check src/content.js && node --check src/pdf-reader.mjs && node --check src/snippets.js"
   },
   "keywords": [
     "chrome-extension",

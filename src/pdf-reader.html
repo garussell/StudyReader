@@ -7,49 +7,109 @@
     <link rel="stylesheet" href="pdf-reader.css">
   </head>
   <body>
-    <header class="topbar">
-      <div class="title">
-        <h1>Study Reader PDF</h1>
-        <p id="fileName">Open a local PDF to begin.</p>
-      </div>
-      <label class="file-control" for="pdfFile">Open PDF</label>
-      <input id="pdfFile" class="visually-hidden" type="file" accept="application/pdf,.pdf">
-    </header>
-
-    <main class="reader-shell">
-      <section class="pdf-pane" aria-label="PDF page">
-        <div class="page-toolbar">
-          <button id="previousPage" type="button">Previous Page</button>
-          <span id="pageStatus">No PDF loaded</span>
-          <button id="nextPage" type="button">Next Page</button>
+    <div class="sticky-shell">
+      <header class="topbar">
+        <div class="title">
+          <h1>Study Reader PDF</h1>
+          <p id="fileName">Open a local PDF to begin.</p>
         </div>
+        <label class="file-control" for="pdfFile">Open PDF</label>
+        <input id="pdfFile" class="visually-hidden" type="file" accept="application/pdf,.pdf">
+      </header>
+
+      <section class="reader-controls" aria-label="PDF reader controls">
+        <div class="control-group" aria-label="Playback controls">
+          <p class="group-label">Playback</p>
+          <div class="control-row">
+            <button id="play" class="primary" type="button">Play</button>
+            <button id="pause" type="button">Pause</button>
+            <button id="resume" type="button">Resume</button>
+            <button id="stop" class="danger" type="button">Stop</button>
+          </div>
+        </div>
+
+        <div class="control-group" aria-label="Sentence controls">
+          <p class="group-label">Sentence</p>
+          <div class="control-row">
+            <button id="previousSentence" type="button">Previous Sentence</button>
+            <button id="nextSentence" type="button">Next Sentence</button>
+          </div>
+        </div>
+
+        <div class="control-group" aria-label="Paragraph controls">
+          <p class="group-label">Paragraph</p>
+          <div class="control-row">
+            <button id="previousParagraph" type="button">Previous Paragraph</button>
+            <button id="nextParagraph" type="button">Next Paragraph</button>
+          </div>
+        </div>
+
+        <div class="control-group" aria-label="Page controls">
+          <p class="group-label">Page</p>
+          <div class="control-row">
+            <button id="previousPage" type="button">Previous Page</button>
+            <button id="nextPage" type="button">Next Page</button>
+          </div>
+        </div>
+
+        <div class="control-group" aria-label="Save controls">
+          <p class="group-label">Save</p>
+          <div class="control-row">
+            <button id="saveSentence" type="button">Save Sentence</button>
+            <button id="saveParagraph" type="button">Save Paragraph</button>
+          </div>
+        </div>
+
+        <div class="control-group" aria-label="Debug tools">
+          <p class="group-label">Debug</p>
+          <div class="control-row">
+            <button id="showPreview" type="button">Show Extracted Text Preview</button>
+          </div>
+        </div>
+
+        <div class="setting-group" aria-label="Speech speed control">
+          <label for="rate">Speed <span id="rateValue">1.0x</span></label>
+          <input id="rate" type="range" min="0.5" max="2" step="0.1" value="1">
+        </div>
+
+        <div class="setting-group setting-group-voice" aria-label="Voice selection">
+          <label for="voice">Voice</label>
+          <select id="voice">
+            <option value="">Default voice</option>
+          </select>
+        </div>
+
+        <div class="setting-group setting-group-layout" aria-label="Reading layout">
+          <label for="layoutMode">Layout</label>
+          <select id="layoutMode">
+            <option value="auto">Auto</option>
+            <option value="single">Single column</option>
+            <option value="two">Two columns</option>
+          </select>
+        </div>
+
+        <div class="setting-group setting-group-follow" aria-label="Follow reading position">
+          <label class="toggle-label" for="followReading">
+            <span>Follow reading position</span>
+            <input id="followReading" type="checkbox" checked>
+          </label>
+        </div>
+
+        <div class="status-group" aria-live="polite">
+          <span id="pageStatus" class="status-pill">No PDF loaded</span>
+          <span id="positionStatus" class="status-pill status-pill-muted">Ready</span>
+        </div>
+      </section>
+    </div>
+
+    <main class="reader-content">
+      <section class="pdf-pane" aria-label="PDF page">
         <div id="canvasWrap" class="canvas-wrap">
           <canvas id="pdfCanvas"></canvas>
         </div>
       </section>
 
-      <aside class="study-pane" aria-label="Reader controls and extracted text">
-        <section class="controls" aria-label="Speech controls">
-          <button id="play" class="primary" type="button">Play from Current Chunk</button>
-          <div class="control-grid">
-            <button id="previousSentence" type="button">Previous Sentence</button>
-            <button id="nextSentence" type="button">Next Sentence</button>
-            <button id="pause" type="button">Pause</button>
-            <button id="resume" type="button">Resume</button>
-          </div>
-          <button id="stop" class="danger" type="button">Stop</button>
-        </section>
-
-        <section class="settings" aria-label="Speech settings">
-          <label for="rate">Speed <span id="rateValue">1.0x</span></label>
-          <input id="rate" type="range" min="0.5" max="2" step="0.1" value="1">
-
-          <label for="voice">Voice</label>
-          <select id="voice">
-            <option value="">Default voice</option>
-          </select>
-        </section>
-
+      <aside class="study-pane" aria-label="Extracted PDF text">
         <section class="text-panel" aria-label="Extracted PDF text">
           <div class="text-heading">
             <h2>Page Text</h2>
@@ -60,6 +120,19 @@
       </aside>
     </main>
 
+    <dialog id="textPreviewDialog" class="preview-dialog">
+      <div class="preview-dialog-body">
+        <div class="preview-dialog-header">
+          <h2>Extracted Text Preview</h2>
+          <button id="closePreview" type="button">Close</button>
+        </div>
+        <p id="textPreviewMeta" class="preview-dialog-meta">No PDF loaded.</p>
+        <pre id="textPreviewContent" class="preview-dialog-content">No extracted text available.</pre>
+      </div>
+    </dialog>
+
+    <script src="shared-prefs.js"></script>
+    <script src="shared-snippets.js"></script>
     <script type="module" src="pdf-reader.mjs"></script>
   </body>
 </html>

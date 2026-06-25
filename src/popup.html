@@ -18,6 +18,8 @@
       <section class="controls" aria-label="Reader controls">
         <button id="readSelection" class="primary" type="button">Read Selection</button>
         <button id="openPdfReader" type="button">Open PDF Reader</button>
+        <button id="openSnippets" type="button">Saved PDF Snippets</button>
+        <p id="snippetCount" class="helper-text">No PDF snippets saved yet.</p>
         <label class="file-button" for="openPdfFile">Open Local PDF</label>
         <input id="openPdfFile" class="visually-hidden" type="file" accept="application/pdf,.pdf">
         <div class="grid">
@@ -40,6 +42,8 @@
       </section>
     </main>
 
+    <script src="shared-prefs.js"></script>
+    <script src="shared-snippets.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>
