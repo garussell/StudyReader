@@ -681,9 +681,7 @@ function renderTextChunks() {
 function playFromCurrentChunk() {
   const sentence = getCurrentSentence();
   if (!sentence) {
-    setStatus(state.documentHasText
-      ? "No selectable text was found on this page."
-      : "This PDF does not appear to contain selectable text. OCR support can be added later.");
+    setStatus("No selectable text was found on this page.");
     return;
   }
 
@@ -749,27 +747,21 @@ function moveSentence(direction, shouldSpeak) {
     return false;
   }
 
-  let chunkIndex = state.currentChunkIndex;
-  let sentenceIndex = state.currentSentenceIndex + direction;
-  const currentChunk = pageData.chunks[chunkIndex];
+  const nextPosition = getAdjacentSentencePosition(
+    pageData,
+    state.currentChunkIndex,
+    state.currentSentenceIndex,
+    direction
+  );
 
-  if (sentenceIndex >= currentChunk.sentences.length) {
-    chunkIndex += 1;
-    sentenceIndex = 0;
-  } else if (sentenceIndex < 0) {
-    chunkIndex -= 1;
-    if (chunkIndex >= 0) {
-      sentenceIndex = pageData.chunks[chunkIndex].sentences.length - 1;
-    }
-  }
-
-  if (chunkIndex < 0 || chunkIndex >= pageData.chunks.length) {
+  if (!nextPosition) {
     renderTextChunks();
+    updateControls();
     return false;
   }
 
-  state.currentChunkIndex = chunkIndex;
-  state.currentSentenceIndex = sentenceIndex;
+  state.currentChunkIndex = nextPosition.chunkIndex;
+  state.currentSentenceIndex = nextPosition.sentenceIndex;
 
   if (shouldSpeak || state.status === "speaking") {
     startCurrentSentence();
@@ -789,16 +781,15 @@ function moveParagraph(direction, shouldSpeak) {
     return false;
   }
 
-  const targetParagraphIndex = currentChunk.paragraphIndex + direction;
-  const targetChunkIndex = pageData.chunks.findIndex((chunk) => chunk.paragraphIndex === targetParagraphIndex);
-
-  if (targetChunkIndex === -1) {
+  const nextPosition = findParagraphStartPosition(pageData, currentChunk.paragraphIndex + direction);
+  if (!nextPosition) {
     renderTextChunks();
+    updateControls();
     return false;
   }
 
-  state.currentChunkIndex = targetChunkIndex;
-  state.currentSentenceIndex = 0;
+  state.currentChunkIndex = nextPosition.chunkIndex;
+  state.currentSentenceIndex = nextPosition.sentenceIndex;
 
   if (shouldSpeak || state.status === "speaking") {
     startCurrentSentence();
@@ -974,15 +965,23 @@ function updateControls() {
   const hasText = Boolean(pageData?.chunks.length);
   const currentChunk = getCurrentChunk();
   const paragraphIndex = currentChunk?.paragraphIndex ?? 0;
+  const hasPreviousSentence = Boolean(
+    hasText && getAdjacentSentencePosition(pageData, state.currentChunkIndex, state.currentSentenceIndex, -1)
+  );
+  const hasNextSentence = Boolean(
+    hasText && getAdjacentSentencePosition(pageData, state.currentChunkIndex, state.currentSentenceIndex, 1)
+  );
+  const hasPreviousParagraph = Boolean(hasText && paragraphIndex > 0);
+  const hasNextParagraph = Boolean(hasText && paragraphIndex < (pageData?.paragraphCount ?? 0) - 1);
 
   els.play.disabled = !hasText;
   els.pause.disabled = !hasText || state.status !== "speaking";
   els.resume.disabled = !hasText || state.status !== "paused";
   els.stop.disabled = !hasText;
-  els.nextSentence.disabled = !hasText;
-  els.previousSentence.disabled = !hasText;
-  els.nextParagraph.disabled = !hasText || paragraphIndex >= (pageData?.paragraphCount ?? 0) - 1;
-  els.previousParagraph.disabled = !hasText || paragraphIndex <= 0;
+  els.nextSentence.disabled = !hasText || !hasNextSentence;
+  els.previousSentence.disabled = !hasText || !hasPreviousSentence;
+  els.nextParagraph.disabled = !hasText || !hasNextParagraph;
+  els.previousParagraph.disabled = !hasText || !hasPreviousParagraph;
   els.nextPage.disabled = !hasPdf || state.currentPage >= state.pdf.numPages;
   els.previousPage.disabled = !hasPdf || state.currentPage <= 1;
   els.saveSentence.disabled = !hasText;
@@ -998,14 +997,19 @@ function showImageOnlyMessage() {
 
 function showExtractedTextPreview() {
   const pageData = state.pageCache.get(state.currentPage);
-  const previewText = pageData?.orderedText?.slice(0, 2000) || "No extracted text available for this page.";
+  const previewText = pageData
+    ? pageData.orderedText.slice(0, 2000)
+    : "No extracted text available for this page.";
   const layoutLabel = pageData?.layout?.mode || normalizeLayoutMode(state.layoutMode);
 
   els.textPreviewMeta.textContent = state.pdf
     ? `Page ${state.currentPage} / Layout ${layoutLabel}`
     : "No PDF loaded.";
   els.textPreviewContent.textContent = previewText;
-  els.textPreviewDialog.showModal();
+
+  if (!els.textPreviewDialog.open) {
+    els.textPreviewDialog.showModal();
+  }
 }
 
 function closeExtractedTextPreview() {
@@ -1091,6 +1095,55 @@ function currentReaderStatus() {
   }
 
   return "Ready";
+}
+
+function getAdjacentSentencePosition(pageData, chunkIndex, sentenceIndex, direction) {
+  const chunk = pageData.chunks[chunkIndex];
+  if (!chunk) {
+    return null;
+  }
+
+  let nextChunkIndex = chunkIndex;
+  let nextSentenceIndex = sentenceIndex + direction;
+
+  if (direction > 0 && nextSentenceIndex >= chunk.sentences.length) {
+    nextChunkIndex += 1;
+    nextSentenceIndex = 0;
+  } else if (direction < 0 && nextSentenceIndex < 0) {
+    nextChunkIndex -= 1;
+    if (nextChunkIndex >= 0) {
+      nextSentenceIndex = pageData.chunks[nextChunkIndex].sentences.length - 1;
+    }
+  }
+
+  if (nextChunkIndex < 0 || nextChunkIndex >= pageData.chunks.length) {
+    return null;
+  }
+
+  return {
+    chunkIndex: nextChunkIndex,
+    sentenceIndex: nextSentenceIndex
+  };
+}
+
+function findParagraphStartPosition(pageData, paragraphIndex) {
+  if (paragraphIndex < 0 || paragraphIndex >= pageData.paragraphs.length) {
+    return null;
+  }
+
+  for (let chunkIndex = 0; chunkIndex < pageData.chunks.length; chunkIndex += 1) {
+    const chunk = pageData.chunks[chunkIndex];
+    if (chunk.paragraphIndex !== paragraphIndex) {
+      continue;
+    }
+
+    return {
+      chunkIndex,
+      sentenceIndex: 0
+    };
+  }
+
+  return null;
 }
 
 function populateVoices() {
@@ -1262,6 +1315,7 @@ function storeFollowReading(value) {
     // Ignore localStorage write failures in restricted contexts.
   }
 }
+
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
