@@ -3,7 +3,7 @@
   background: #ffdf6e;
 }
 
-.study-reader-mini-player {
+.study-reader-toolbar {
   --bg: rgba(255, 255, 255, 0.97);
   --panel-bg: #f8fafc;
   --text: #17202a;
@@ -37,7 +37,7 @@
   font-family: "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
-.study-reader-mini-player[data-theme="dark"] {
+.study-reader-toolbar[data-theme="dark"] {
   --bg: rgba(24, 33, 43, 0.96);
   --panel-bg: #202b36;
   --text: #e7edf5;
@@ -65,6 +65,13 @@
   align-items: start;
   justify-content: space-between;
   gap: 10px;
+}
+
+.study-reader-mini-header-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: end;
+  gap: 6px;
 }
 
 .study-reader-mini-status {
@@ -188,9 +195,50 @@
   color: var(--danger);
 }
 
+.study-reader-mini-player .study-reader-mini-menu,
+.study-reader-mini-player .study-reader-mini-close,
 .study-reader-mini-player .study-reader-mini-collapse {
   min-width: 32px;
+}
+
+.study-reader-mini-player .study-reader-mini-collapse {
   padding: 0;
+}
+
+.study-reader-mini-player .study-reader-mini-close {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.study-reader-mini-toast {
+  --bg: rgba(255, 255, 255, 0.97);
+  --text: #17202a;
+  --border: rgba(21, 32, 43, 0.18);
+  --shadow: 0 14px 36px rgba(15, 23, 42, 0.22);
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 2147483647;
+  max-width: min(360px, calc(100vw - 28px));
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  background: var(--bg);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(12px);
+  font: 600 12px/1.4 "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.study-reader-mini-toast[data-theme="dark"] {
+  --bg: rgba(24, 33, 43, 0.96);
+  --text: #e7edf5;
+  --border: #344556;
+  --shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+}
+
+.study-reader-mini-toast[hidden] {
+  display: none !important;
 }
 
 .study-reader-fallback-highlight {
@@ -204,6 +252,12 @@
     bottom: 12px;
     width: calc(100vw - 24px);
     padding: 10px;
+  }
+
+  .study-reader-mini-toast {
+    right: 12px;
+    bottom: 12px;
+    max-width: calc(100vw - 24px);
   }
 
   .study-reader-mini-groups {

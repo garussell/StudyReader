@@ -14,6 +14,14 @@ const SNIPPETS_MESSAGE_TYPES = new Set([
 ]);
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === "STUDY_READER_OPEN_POPUP") {
+    openStudyReaderPopup()
+      .then((opened) => sendResponse({ ok: true, opened }))
+      .catch((error) => sendResponse({ ok: false, opened: false, error: error.message }));
+
+    return true;
+  }
+
   if (SNIPPETS_MESSAGE_TYPES.has(message?.type)) {
     handleSnippetStorageMessage(message)
       .then((response) => sendResponse({ ok: true, ...response }))
@@ -126,6 +134,19 @@ async function forwardToActiveTab(payload) {
     type: "STUDY_READER_CONTENT_COMMAND",
     payload
   });
+}
+
+async function openStudyReaderPopup() {
+  if (!chrome?.action?.openPopup) {
+    return false;
+  }
+
+  try {
+    await chrome.action.openPopup();
+    return true;
+  } catch (_error) {
+    return false;
+  }
 }
 
 async function ensureContentScript(tabId) {

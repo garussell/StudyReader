@@ -271,7 +271,7 @@ input[type="range"] {
 }
 
 .control-group-behavior {
-  min-width: 220px;
+  min-width: 260px;
 }
 
 .toggle-list {
@@ -286,7 +286,7 @@ input[type="range"] {
   justify-content: space-between;
   gap: 12px;
   min-height: 36px;
-  color: #3f4b5a;
+  color: var(--text);
   font-size: 12px;
   font-weight: 650;
 }
@@ -296,6 +296,101 @@ input[type="range"] {
 }
 
 .toggle-option input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+
+.filter-menu-wrap {
+  position: relative;
+  min-width: 0;
+  overflow: visible;
+}
+
+.filter-menu-button {
+  width: 100%;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+}
+
+.filter-menu-summary {
+  color: var(--muted-text);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.filter-menu-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  left: auto;
+  z-index: 9999;
+  width: min(360px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-bg);
+  box-shadow: var(--shadow-strong);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.filter-menu-panel[hidden] {
+  display: none !important;
+}
+
+.filter-menu-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.filter-menu-title,
+.filter-menu-subtitle {
+  margin: 0;
+}
+
+.filter-menu-title {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.filter-menu-subtitle {
+  color: var(--muted-text);
+  font-size: 12px;
+}
+
+.filter-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.filter-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 36px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.filter-option-text {
+  flex: 1 1 auto;
+}
+
+.filter-option input[type="checkbox"] {
   width: 18px;
   height: 18px;
   margin: 0;

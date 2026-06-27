@@ -18,7 +18,12 @@ const PDF_LAYOUT_MODES = {
   TWO: "two"
 };
 const DEFAULT_SPEECH_FILTERS = {
-  skipCitations: false
+  skipCitations: false,
+  skipParentheticalText: false,
+  skipBracketCitations: false,
+  skipUrlsDois: false,
+  skipFigureTableReferences: false,
+  stopBeforeReferencesSection: false
 };
 
 const els = {
@@ -43,6 +48,10 @@ const els = {
   saveParagraph: document.getElementById("saveParagraph"),
   showPreview: document.getElementById("showPreview"),
   showNavigator: document.getElementById("showNavigator"),
+  filterMenuWrap: document.getElementById("filterMenuWrap"),
+  filterMenuButton: document.getElementById("filterMenuButton"),
+  filterMenuSummary: document.getElementById("filterMenuSummary"),
+  filterMenuPanel: document.getElementById("filterMenuPanel"),
   rate: document.getElementById("rate"),
   rateValue: document.getElementById("rateValue"),
   voice: document.getElementById("voice"),
@@ -50,6 +59,11 @@ const els = {
   layoutMode: document.getElementById("layoutMode"),
   followReading: document.getElementById("followReading"),
   skipCitations: document.getElementById("skipCitations"),
+  skipParentheticalText: document.getElementById("skipParentheticalText"),
+  skipBracketCitations: document.getElementById("skipBracketCitations"),
+  skipUrlsDois: document.getElementById("skipUrlsDois"),
+  skipFigureTableReferences: document.getElementById("skipFigureTableReferences"),
+  stopBeforeReferencesSection: document.getElementById("stopBeforeReferencesSection"),
   textPreviewDialog: document.getElementById("textPreviewDialog"),
   textPreviewMeta: document.getElementById("textPreviewMeta"),
   textPreviewContent: document.getElementById("textPreviewContent"),
@@ -79,6 +93,8 @@ const state = {
   utterance: null,
   speechRunId: 0,
   documentHasText: false,
+  referencesStopPosition: null,
+  filterMenuOpen: false,
   statusRestoreTimer: null,
   scrollFrameId: null,
   lastScrollAt: 0
@@ -95,7 +111,9 @@ async function init() {
   els.rate.value = String(state.prefs.rate);
   els.layoutMode.value = state.layoutMode;
   els.followReading.checked = state.followReadingPosition;
-  els.skipCitations.checked = state.speechFilters.skipCitations;
+  syncSpeechFilterControls();
+  updateFilterMenuSummary();
+  setFilterMenuOpen(false);
   updateRateLabel();
   wireEvents();
   populateVoices();
@@ -110,6 +128,9 @@ async function init() {
       els.theme.value = mode;
     });
   }
+
+  document.addEventListener("pointerdown", handleDocumentPointerDown, true);
+  document.addEventListener("keydown", handleDocumentKeydown);
 
   const params = new URLSearchParams(location.search);
   if (params.get("load") === "last") {
@@ -133,6 +154,7 @@ function wireEvents() {
   els.saveParagraph.addEventListener("click", () => saveCurrentSnippet("paragraph"));
   els.showPreview.addEventListener("click", showExtractedTextPreview);
   els.showNavigator.addEventListener("click", openReadingNavigator);
+  els.filterMenuButton.addEventListener("click", toggleFilterMenu);
   els.closePreview.addEventListener("click", closeExtractedTextPreview);
   els.closeNavigator.addEventListener("click", closeReadingNavigator);
   els.textPreviewDialog.addEventListener("click", (event) => {
@@ -175,11 +197,21 @@ function wireEvents() {
     storeFollowReading(state.followReadingPosition);
   });
 
-  els.skipCitations.addEventListener("change", async () => {
+  bindSpeechFilterToggle(els.skipCitations, "skipCitations");
+  bindSpeechFilterToggle(els.skipParentheticalText, "skipParentheticalText");
+  bindSpeechFilterToggle(els.skipBracketCitations, "skipBracketCitations");
+  bindSpeechFilterToggle(els.skipUrlsDois, "skipUrlsDois");
+  bindSpeechFilterToggle(els.skipFigureTableReferences, "skipFigureTableReferences");
+  bindSpeechFilterToggle(els.stopBeforeReferencesSection, "stopBeforeReferencesSection");
+}
+
+function bindSpeechFilterToggle(input, key) {
+  input.addEventListener("change", async () => {
     state.speechFilters = {
       ...state.speechFilters,
-      skipCitations: els.skipCitations.checked
+      [key]: input.checked
     };
+    updateFilterMenuSummary();
     await saveSpeechFilters(state.speechFilters);
   });
 }
@@ -232,6 +264,7 @@ async function applyLayoutModeChange(nextMode) {
   state.currentChunkIndex = 0;
   state.currentSentenceIndex = 0;
   state.documentHasText = false;
+  state.referencesStopPosition = null;
 
   await preloadTextContent();
   await renderPage(targetPage);
@@ -255,6 +288,7 @@ async function loadPdf(bytes, name) {
   state.currentChunkIndex = 0;
   state.currentSentenceIndex = 0;
   state.documentHasText = false;
+  state.referencesStopPosition = null;
 
   const loadingTask = pdfjsLib.getDocument({ data: bytes });
   state.pdf = await loadingTask.promise;
@@ -277,10 +311,19 @@ async function loadPdf(bytes, name) {
 }
 
 async function preloadTextContent() {
+  state.referencesStopPosition = null;
+
   for (let pageNumber = 1; pageNumber <= state.pdf.numPages; pageNumber += 1) {
     const pageData = await extractPageData(pageNumber);
     if (pageData.chunks.length > 0) {
       state.documentHasText = true;
+    }
+
+    if (state.referencesStopPosition === null && pageData.referencesStartParagraphIndex !== null) {
+      state.referencesStopPosition = {
+        pageNumber,
+        paragraphIndex: pageData.referencesStartParagraphIndex
+      };
     }
   }
 }
@@ -337,7 +380,8 @@ async function extractPageData(pageNumber) {
     orderedText: orderedPage.orderedText,
     paragraphs,
     chunks,
-    paragraphCount: paragraphs.length
+    paragraphCount: paragraphs.length,
+    referencesStartParagraphIndex: findReferencesStartParagraphIndex(orderedPage.paragraphTexts)
   };
 
   state.pageCache.set(pageNumber, pageData);
@@ -828,12 +872,10 @@ function moveSentence(direction, shouldSpeak) {
     return false;
   }
 
-  const nextPosition = getAdjacentSentencePosition(
-    pageData,
-    state.currentChunkIndex,
-    state.currentSentenceIndex,
-    direction
-  );
+  const nextPosition = findSpeakableSentencePosition(pageData, state.currentChunkIndex, state.currentSentenceIndex, {
+    direction,
+    includeCurrent: false
+  });
 
   if (!nextPosition) {
     renderTextChunks();
@@ -862,7 +904,7 @@ function moveParagraph(direction, shouldSpeak) {
     return false;
   }
 
-  const nextPosition = findParagraphStartPosition(pageData, currentChunk.paragraphIndex + direction);
+  const nextPosition = findSpeakableParagraphPosition(pageData, currentChunk.paragraphIndex, direction);
   if (!nextPosition) {
     renderTextChunks();
     updateControls();
@@ -1038,13 +1080,19 @@ function updateControls() {
   const currentChunk = getCurrentChunk();
   const paragraphIndex = currentChunk?.paragraphIndex ?? 0;
   const hasPreviousSentence = Boolean(
-    hasText && getAdjacentSentencePosition(pageData, state.currentChunkIndex, state.currentSentenceIndex, -1)
+    hasText && findSpeakableSentencePosition(pageData, state.currentChunkIndex, state.currentSentenceIndex, {
+      direction: -1,
+      includeCurrent: false
+    })
   );
   const hasNextSentence = Boolean(
-    hasText && getAdjacentSentencePosition(pageData, state.currentChunkIndex, state.currentSentenceIndex, 1)
+    hasText && findSpeakableSentencePosition(pageData, state.currentChunkIndex, state.currentSentenceIndex, {
+      direction: 1,
+      includeCurrent: false
+    })
   );
-  const hasPreviousParagraph = Boolean(hasText && paragraphIndex > 0);
-  const hasNextParagraph = Boolean(hasText && paragraphIndex < (pageData?.paragraphCount ?? 0) - 1);
+  const hasPreviousParagraph = Boolean(hasText && findSpeakableParagraphPosition(pageData, paragraphIndex, -1));
+  const hasNextParagraph = Boolean(hasText && findSpeakableParagraphPosition(pageData, paragraphIndex, 1));
 
   els.play.disabled = !hasText;
   els.pause.disabled = !hasText || state.status !== "speaking";
@@ -1185,6 +1233,55 @@ function currentReaderStatus() {
   }
 
   return "Ready";
+}
+
+function toggleFilterMenu(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  setFilterMenuOpen(!state.filterMenuOpen);
+}
+
+function setFilterMenuOpen(isOpen) {
+  state.filterMenuOpen = Boolean(isOpen);
+  els.filterMenuPanel.hidden = !state.filterMenuOpen;
+  els.filterMenuButton.setAttribute("aria-expanded", String(state.filterMenuOpen));
+}
+
+function handleDocumentPointerDown(event) {
+  if (!state.filterMenuOpen) {
+    return;
+  }
+
+  const target = event.target instanceof Node ? event.target : null;
+  if (target && els.filterMenuWrap.contains(target)) {
+    return;
+  }
+
+  setFilterMenuOpen(false);
+}
+
+function handleDocumentKeydown(event) {
+  if (event.key === "Escape" && state.filterMenuOpen) {
+    setFilterMenuOpen(false);
+  }
+}
+
+function syncSpeechFilterControls() {
+  els.skipCitations.checked = state.speechFilters.skipCitations;
+  els.skipParentheticalText.checked = state.speechFilters.skipParentheticalText;
+  els.skipBracketCitations.checked = state.speechFilters.skipBracketCitations;
+  els.skipUrlsDois.checked = state.speechFilters.skipUrlsDois;
+  els.skipFigureTableReferences.checked = state.speechFilters.skipFigureTableReferences;
+  els.stopBeforeReferencesSection.checked = state.speechFilters.stopBeforeReferencesSection;
+}
+
+function getActiveSpeechFilterCount(filters = state.speechFilters) {
+  return Object.values(filters).filter(Boolean).length;
+}
+
+function updateFilterMenuSummary() {
+  const activeCount = getActiveSpeechFilterCount();
+  els.filterMenuSummary.textContent = activeCount > 0 ? `${activeCount} on` : "Off";
 }
 
 function getNavigatorParagraphRecords() {
@@ -1401,9 +1498,7 @@ function findSpeakableSentencePosition(pageData, chunkIndex, sentenceIndex, { di
     : getAdjacentSentencePosition(pageData, chunkIndex, sentenceIndex, direction);
 
   while (position) {
-    const sentence = pageData.chunks[position.chunkIndex]?.sentences[position.sentenceIndex];
-    const speechText = sentence ? cleanForSpeech(sentence.text, state.speechFilters) : "";
-    if (speechText) {
+    if (isSentenceSpeakable(pageData, position.chunkIndex, position.sentenceIndex)) {
       return position;
     }
 
@@ -1431,6 +1526,62 @@ function findParagraphStartPosition(pageData, paragraphIndex) {
   }
 
   return null;
+}
+
+function findSpeakableParagraphPosition(pageData, currentParagraphIndex, direction) {
+  let paragraphIndex = currentParagraphIndex + direction;
+
+  while (paragraphIndex >= 0 && paragraphIndex < pageData.paragraphs.length) {
+    if (isParagraphSpeakable(pageData.pageNumber, paragraphIndex)) {
+      const startPosition = findParagraphStartPosition(pageData, paragraphIndex);
+      if (startPosition) {
+        const sentencePosition = findSpeakableSentencePosition(
+          pageData,
+          startPosition.chunkIndex,
+          startPosition.sentenceIndex,
+          { direction: 1, includeCurrent: true }
+        );
+
+        if (sentencePosition && pageData.chunks[sentencePosition.chunkIndex]?.paragraphIndex === paragraphIndex) {
+          return sentencePosition;
+        }
+      }
+    }
+
+    paragraphIndex += direction;
+  }
+
+  return null;
+}
+
+function isSentenceSpeakable(pageData, chunkIndex, sentenceIndex) {
+  const chunk = pageData.chunks[chunkIndex];
+  if (!chunk || !isParagraphSpeakable(pageData.pageNumber, chunk.paragraphIndex)) {
+    return false;
+  }
+
+  const sentence = chunk.sentences[sentenceIndex];
+  if (!sentence) {
+    return false;
+  }
+
+  return Boolean(cleanForSpeech(sentence.text, state.speechFilters));
+}
+
+function isParagraphSpeakable(pageNumber, paragraphIndex) {
+  if (!state.speechFilters.stopBeforeReferencesSection || !state.referencesStopPosition) {
+    return true;
+  }
+
+  if (pageNumber < state.referencesStopPosition.pageNumber) {
+    return true;
+  }
+
+  if (pageNumber > state.referencesStopPosition.pageNumber) {
+    return false;
+  }
+
+  return paragraphIndex < state.referencesStopPosition.paragraphIndex;
 }
 
 function populateVoices() {
@@ -1643,11 +1794,16 @@ async function saveSpeechFilters(filters) {
 
 function normalizeSpeechFilters(filters) {
   return {
-    skipCitations: Boolean(filters?.skipCitations)
+    skipCitations: Boolean(filters?.skipCitations),
+    skipParentheticalText: Boolean(filters?.skipParentheticalText),
+    skipBracketCitations: Boolean(filters?.skipBracketCitations),
+    skipUrlsDois: Boolean(filters?.skipUrlsDois),
+    skipFigureTableReferences: Boolean(filters?.skipFigureTableReferences),
+    stopBeforeReferencesSection: Boolean(filters?.stopBeforeReferencesSection)
   };
 }
 
-function cleanForSpeech(text, options = DEFAULT_SPEECH_FILTERS) {
+function legacyCleanForSpeech(text, options = DEFAULT_SPEECH_FILTERS) {
   let nextText = String(text || "");
 
   if (options.skipCitations) {
@@ -1664,6 +1820,70 @@ function cleanForSpeech(text, options = DEFAULT_SPEECH_FILTERS) {
     .trim();
 }
 
+
+function cleanForSpeech(text, options = DEFAULT_SPEECH_FILTERS) {
+  try {
+    const filters = normalizeSpeechFilters(options);
+    let nextText = String(text || "");
+
+    if (filters.skipUrlsDois) {
+      nextText = nextText
+        .replace(/\bhttps?:\/\/\S+/gi, " ")
+        .replace(/\bwww\.\S+/gi, " ")
+        .replace(/\bdoi:\s*\S+/gi, " ")
+        .replace(/\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+\b/gi, " ");
+    }
+
+    if (filters.skipBracketCitations) {
+      nextText = nextText.replace(/\[\s*\d+(?:\s*[-\u2013]\s*\d+)?(?:\s*,\s*\d+(?:\s*[-\u2013]\s*\d+)?)*\s*\]/g, " ");
+    }
+
+    if (filters.skipCitations) {
+      nextText = nextText
+        .replace(/\((?:[^()]*\b(?:19|20)\d{2}[a-z]?\b[^()]*)\)/gi, " ")
+        .replace(/\((?:\s*pp?\.?\s*\d+(?:\s*[-\u2013]\s*\d+)?\s*)\)/gi, " ")
+        .replace(/\((?:[^()]*\b[A-Z][A-Za-z'’.-]+(?:\s+et\s+al\.)?(?:\s*(?:&|and)\s*[A-Z][A-Za-z'’.-]+)?[^()]*\b(?:19|20)\d{2}[a-z]?\b[^()]*)\)/g, " ");
+    }
+
+    if (filters.skipParentheticalText) {
+      let previous = "";
+      while (previous !== nextText) {
+        previous = nextText;
+        nextText = nextText.replace(/\([^()]*\)/g, " ");
+      }
+    }
+
+    if (filters.skipFigureTableReferences) {
+      nextText = nextText
+        .replace(/\b(?:see|shown in|as shown in|refer to|in)\s+(?:fig(?:ure)?\.?|table|appendix)\s+[A-Z]?\d+[A-Z]?\b/gi, " ")
+        .replace(/\b(?:fig(?:ure)?\.?|table)\s+\d+[A-Z]?\b/gi, " ")
+        .replace(/\bappendix\s+[A-Z]\b/gi, " ");
+    }
+
+    return nextText
+      .replace(/\s+([,.;:!?])/g, "$1")
+      .replace(/([([{])\s+/g, "$1")
+      .replace(/\s+([)\]}])/g, "$1")
+      .replace(/\s{2,}/g, " ")
+      .replace(/\s*\n\s*/g, " ")
+      .trim();
+  } catch (_error) {
+    return normalizeWhitespace(String(text || ""));
+  }
+}
+
+function findReferencesStartParagraphIndex(paragraphTexts) {
+  for (let index = 0; index < paragraphTexts.length; index += 1) {
+    const candidate = normalizeWhitespace(paragraphTexts[index] || "")
+      .replace(/[.:;]+$/g, "");
+
+    if (/^(references|bibliography|works cited)$/i.test(candidate)) {
+      return index;
+    }
+  }
+
+  return null;
+}
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
