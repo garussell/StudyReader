@@ -129,6 +129,11 @@ async function init() {
     });
   }
 
+  if (state.debugLayout) {
+    runSuperscriptCleanupRegressionDebug();
+    runSyntheticSuperscriptLineAssemblyDebug();
+  }
+
   document.addEventListener("pointerdown", handleDocumentPointerDown, true);
   document.addEventListener("keydown", handleDocumentKeydown);
 
@@ -384,12 +389,23 @@ async function extractPageData(pageNumber) {
     referencesStartParagraphIndex: findReferencesStartParagraphIndex(orderedPage.paragraphTexts)
   };
 
+  if (state.debugLayout) {
+    console.info("Study Reader: extracted page data", {
+      pageNumber,
+      paragraphTexts: pageData.paragraphs.map((paragraph) => paragraph.text),
+      sentences: pageData.paragraphs.map((paragraph, paragraphIndex) => ({
+        paragraphIndex,
+        sentences: paragraph.sentences.map((sentence) => sentence.text)
+      }))
+    });
+  }
+
   state.pageCache.set(pageNumber, pageData);
   return pageData;
 }
 
 function extractStructuredTextItems(items, pageNumber) {
-  return items
+  const structuredItems = items
     .filter((item) => typeof item.str === "string" && item.str.trim())
     .map((item) => {
       const text = normalizeWhitespace(item.str);
@@ -399,17 +415,41 @@ function extractStructuredTextItems(items, pageNumber) {
       const width = Number(item.width) || Math.abs(Number(item.transform?.[0]) || 0) * Math.max(text.length, 1) || 0;
 
       return {
+        rawText: item.str,
         text,
         x,
         y,
         width,
         height,
+        transform: Array.isArray(item.transform) ? item.transform.slice() : [],
+        fontSizeEstimate: Math.max(
+          Math.abs(Number(item.transform?.[0]) || 0),
+          Math.abs(Number(item.transform?.[3]) || 0),
+          height,
+          1
+        ),
         endX: x + width,
         hasEOL: Boolean(item.hasEOL),
         pageNumber
       };
     })
     .filter((item) => item.text);
+
+  if (state.debugLayout) {
+    console.info("Study Reader: raw PDF text items", {
+      pageNumber,
+      itemCount: structuredItems.length,
+      items: structuredItems.slice(0, 80).map((item) => ({
+        text: item.text,
+        x: item.x,
+        y: item.y,
+        width: item.width,
+        height: item.height
+      }))
+    });
+  }
+
+  return structuredItems;
 }
 
 function buildOrderedPageContent(textItems, pageNumber) {
@@ -563,36 +603,201 @@ function buildForcedTwoColumnContent(textItems, layout, bounds, pageNumber) {
 }
 
 function groupTextItemsIntoLines(items) {
-  const textItems = items.slice().sort((a, b) => {
+  const textItems = sortTextItemsForReading(items);
+  const bodyItems = [];
+  const superscriptItems = [];
+
+  textItems.forEach((item) => {
+    if (isPossibleSuperscriptReferenceItem(item)) {
+      superscriptItems.push(item);
+      return;
+    }
+
+    bodyItems.push(item);
+  });
+
+  const lines = bodyItems.length > 0
+    ? buildBaselineLines(bodyItems)
+    : buildSequentialLines(textItems);
+
+  if (state.debugLayout) {
+    logRawLineGroups("before superscript attachment", lines);
+  }
+
+  attachSuperscriptItemsToLines(superscriptItems, lines);
+
+  if (state.debugLayout) {
+    logRawLineGroups("after superscript attachment", lines);
+  }
+
+  return mergeDetachedSuperscriptLines(lines)
+    .map((line) => finalizeLine(line))
+    .sort((a, b) => {
+      if (Math.abs(a.y - b.y) > 3) {
+        return b.y - a.y;
+      }
+      return a.startX - b.startX;
+    })
+    .filter((line) => line.text);
+}
+
+function sortTextItemsForReading(items) {
+  return items.slice().sort((a, b) => {
     if (Math.abs(a.y - b.y) > 3) {
       return b.y - a.y;
     }
     return a.x - b.x;
   });
+}
 
+function buildSequentialLines(items) {
   const lines = [];
 
-  for (const item of textItems) {
+  for (const item of items) {
     const last = lines[lines.length - 1];
     if (!last || Math.abs(last.y - item.y) > Math.max(4, Math.min(last.height, item.height) * 0.6)) {
-      lines.push({
-        pageNumber: item.pageNumber,
-        y: item.y,
-        height: item.height,
-        items: [item],
-        forceBreak: item.hasEOL
-      });
+      lines.push(createRawLine(item));
       continue;
     }
 
-    last.items.push(item);
-    last.forceBreak = last.forceBreak || item.hasEOL;
-    last.height = Math.max(last.height, item.height);
+    addItemToRawLine(last, item);
   }
 
-  return lines
-    .map((line) => finalizeLine(line))
-    .filter((line) => line.text);
+  return lines;
+}
+
+function buildBaselineLines(items) {
+  const lines = [];
+
+  for (const item of items) {
+    const targetLine = findBestBodyLine(lines, item);
+    if (!targetLine) {
+      lines.push(createRawLine(item));
+      continue;
+    }
+
+    addItemToRawLine(targetLine, item);
+  }
+
+  return lines;
+}
+
+function createRawLine(item) {
+  return {
+    pageNumber: item.pageNumber,
+    y: item.y,
+    height: item.height,
+    items: [item],
+    bodyItems: [item],
+    forceBreak: item.hasEOL
+  };
+}
+
+function addItemToRawLine(line, item, { superscriptOnly = false } = {}) {
+  line.items.push(item);
+  line.forceBreak = line.forceBreak || item.hasEOL;
+  line.height = Math.max(line.height, item.height);
+
+  if (!superscriptOnly) {
+    line.bodyItems = line.bodyItems || [];
+    line.bodyItems.push(item);
+    line.y = median(line.bodyItems.map((bodyItem) => bodyItem.y)) || line.y;
+  }
+}
+
+function findBestBodyLine(lines, item) {
+  let bestLine = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const line of lines) {
+    const lineStats = buildLineStats(line.bodyItems?.length ? line.bodyItems : line.items);
+    const deltaY = Math.abs((lineStats.baselineY || line.y) - item.y);
+    const tolerance = Math.max(4, Math.min(lineStats.medianHeight, item.height) * 0.7);
+    if (deltaY > tolerance) {
+      continue;
+    }
+
+    const lineSummary = summarizeRawLine(line);
+    const deltaX = item.x >= lineSummary.startX
+      ? Math.max(0, item.x - lineSummary.endX)
+      : Math.max(0, lineSummary.startX - item.endX);
+    const score = deltaY * 100 + deltaX;
+
+    if (score < bestScore) {
+      bestScore = score;
+      bestLine = line;
+    }
+  }
+
+  return bestLine;
+}
+
+function attachSuperscriptItemsToLines(items, lines) {
+  for (const item of items) {
+    const hostLine = findBestSuperscriptLine(lines, item);
+    if (hostLine) {
+      addItemToRawLine(hostLine, item, { superscriptOnly: true });
+      continue;
+    }
+
+    const fallbackLine = createRawLine(item);
+    fallbackLine.bodyItems = [];
+    lines.push(fallbackLine);
+  }
+}
+
+function findBestSuperscriptLine(lines, item) {
+  let bestLine = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const line of lines) {
+    const summary = summarizeRawLine(line);
+    const stats = buildLineStats(line.bodyItems?.length ? line.bodyItems : line.items);
+    const deltaY = Math.abs((stats.baselineY || summary.y) - item.y);
+    const deltaX = item.x >= summary.startX
+      ? Math.max(0, item.x - summary.endX)
+      : Math.max(0, summary.startX - item.endX);
+    const withinBand = deltaY <= Math.max(stats.medianHeight, 12);
+    const nearLine = item.x >= summary.startX - 8
+      && item.x <= summary.endX + Math.max(stats.medianHeight * 2.4, 26);
+
+    if (!withinBand || !nearLine) {
+      continue;
+    }
+
+    const score = deltaY * 100 + deltaX;
+    if (score < bestScore) {
+      bestScore = score;
+      bestLine = line;
+    }
+  }
+
+  return bestLine;
+}
+
+function isPossibleSuperscriptReferenceItem(item) {
+  return isSuperscriptReferenceText(item.text)
+    && (item.text.length <= 3)
+    && (item.height <= item.fontSizeEstimate * 0.85 || item.width <= Math.max(8, item.fontSizeEstimate * 0.7));
+}
+
+function logRawLineGroups(label, lines) {
+  console.info(`Study Reader: line groups ${label}`, lines.map((line) => {
+    const summary = summarizeRawLine(line);
+    return {
+      y: summary.y,
+      startX: summary.startX,
+      endX: summary.endX,
+      text: summary.text,
+      items: summary.items.map((item) => ({
+        text: item.text,
+        x: item.x,
+        y: item.y,
+        width: item.width,
+        height: item.height
+      }))
+    };
+  }));
 }
 
 function finalizeLine(line) {
@@ -614,7 +819,226 @@ function finalizeLine(line) {
 }
 
 function joinLineText(items) {
-  return normalizeWhitespace(items.map((item) => item.text).join(" "));
+  const sortedItems = items.slice().sort((a, b) => a.x - b.x);
+  const lineStats = buildLineStats(sortedItems);
+  const keptItems = [];
+  const skippedItems = [];
+
+  sortedItems.forEach((item, index) => {
+    const previousItem = keptItems[keptItems.length - 1] || sortedItems[index - 1] || null;
+    if (isLikelySuperscriptReference(item, previousItem, lineStats)) {
+      skippedItems.push({
+        item,
+        previousText: previousItem?.text || "",
+        nextText: sortedItems[index + 1]?.text || ""
+      });
+      return;
+    }
+
+    keptItems.push(item);
+  });
+
+  const beforeText = normalizeWhitespace(sortedItems.map((item) => item.text).join(" "));
+  const afterText = normalizeWhitespace(keptItems.map((item) => item.text).join(" "));
+
+  if (state.debugLayout) {
+    console.info("Study Reader: assembled line", {
+      beforeText,
+      afterText,
+      skippedItems: skippedItems.map(({ item, previousText, nextText }) => ({
+        text: item.text,
+        x: item.x,
+        y: item.y,
+        width: item.width,
+        height: item.height,
+        previousText,
+        nextText
+      }))
+    });
+  }
+
+  return afterText;
+}
+
+function mergeDetachedSuperscriptLines(lines) {
+  const entries = lines
+    .map((line, index) => ({
+      index,
+      line,
+      summary: summarizeRawLine(line)
+    }))
+    .sort((a, b) => {
+      if (Math.abs(a.summary.y - b.summary.y) > 3) {
+        return b.summary.y - a.summary.y;
+      }
+      return a.summary.startX - b.summary.startX;
+    });
+  const removedIndexes = new Set();
+
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (removedIndexes.has(entry.index) || !isLikelyDetachedSuperscriptLine(entry.summary)) {
+      continue;
+    }
+
+    const hostEntry = findSuperscriptHostLine(entries, index, removedIndexes);
+    if (!hostEntry) {
+      continue;
+    }
+
+    hostEntry.line.items.push(...entry.line.items);
+    hostEntry.line.forceBreak = hostEntry.line.forceBreak || entry.line.forceBreak;
+    hostEntry.line.height = Math.max(hostEntry.line.height, entry.line.height);
+    hostEntry.summary = summarizeRawLine(hostEntry.line);
+    removedIndexes.add(entry.index);
+
+    if (state.debugLayout) {
+      console.info("Study Reader: merged detached superscript line", {
+        superscriptText: entry.summary.text,
+        hostTextBefore: hostEntry.summary.text
+      });
+    }
+  }
+
+  return entries
+    .filter((entry) => !removedIndexes.has(entry.index))
+    .map((entry) => entry.line);
+}
+
+function summarizeRawLine(line) {
+  const items = line.items.slice().sort((a, b) => a.x - b.x);
+  const startX = Math.min(...items.map((item) => item.x));
+  const endX = Math.max(...items.map((item) => item.endX));
+
+  return {
+    y: median(items.map((item) => item.y)),
+    height: Math.max(...items.map((item) => item.height)),
+    startX,
+    endX,
+    width: Math.max(0, endX - startX),
+    items,
+    text: normalizeWhitespace(items.map((item) => item.text).join(" "))
+  };
+}
+
+function isLikelyDetachedSuperscriptLine(lineSummary) {
+  return lineSummary.items.length <= 3
+    && lineSummary.width <= Math.max(28, lineSummary.height * 4)
+    && lineSummary.items.every((item) => isSuperscriptReferenceText(item.text));
+}
+
+function findSuperscriptHostLine(entries, entryIndex, removedIndexes) {
+  const superscriptEntry = entries[entryIndex];
+  let bestCandidate = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const offset of [1, -1, 2, -2]) {
+    const candidate = entries[entryIndex + offset];
+    if (!candidate || removedIndexes.has(candidate.index) || isLikelyDetachedSuperscriptLine(candidate.summary)) {
+      continue;
+    }
+
+    if (!canMergeSuperscriptLine(superscriptEntry.summary, candidate.summary)) {
+      continue;
+    }
+
+    const score = Math.abs(candidate.summary.y - superscriptEntry.summary.y) * 10
+      + Math.abs(superscriptEntry.summary.startX - candidate.summary.endX);
+
+    if (score < bestScore) {
+      bestScore = score;
+      bestCandidate = candidate;
+    }
+  }
+
+  return bestCandidate;
+}
+
+function canMergeSuperscriptLine(superscriptSummary, hostSummary) {
+  const hostStats = buildLineStats(hostSummary.items);
+  const sameBand = Math.abs(superscriptSummary.y - hostStats.baselineY) <= Math.max(hostStats.medianHeight, 12);
+  const nearHostText = superscriptSummary.startX >= hostSummary.startX - 6
+    && superscriptSummary.startX <= hostSummary.endX + Math.max(hostStats.medianHeight * 1.8, 20);
+  const afterHostStart = superscriptSummary.startX >= hostSummary.startX + Math.max(hostStats.medianHeight * 0.4, 8);
+
+  return sameBand && nearHostText && afterHostStart;
+}
+
+function buildLineStats(items) {
+  const usableItems = items.filter((item) => !isSuperscriptReferenceText(item.text));
+  const referenceItems = usableItems.length > 0 ? usableItems : items;
+  const heights = referenceItems.map((item) => item.height);
+  const medianHeight = median(heights) || 10;
+  const baselineItems = referenceItems.filter((item) => item.height >= medianHeight * 0.85);
+  const baselineSource = baselineItems.length > 0 ? baselineItems : referenceItems;
+
+  return {
+    medianHeight,
+    baselineY: median(baselineSource.map((item) => item.y)) || 0
+  };
+}
+
+function legacyIsLikelySuperscriptReference(item, previousItem, lineStats) {
+  if (!item || !isSuperscriptReferenceText(item.text)) {
+    return false;
+  }
+
+  const unicodeSuperscript = /[¹²³⁴⁵⁶⁷⁸⁹⁰]/.test(item.text);
+  const raisedAmount = item.y - lineStats.baselineY;
+  const raisedEnough = unicodeSuperscript || raisedAmount >= Math.max(1, lineStats.medianHeight * 0.12);
+  const smallEnough = unicodeSuperscript
+    || item.height <= lineStats.medianHeight * 0.84
+    || item.width <= Math.max(8, lineStats.medianHeight * 0.68);
+  const nearPrevious = previousItem
+    ? item.x - previousItem.endX <= Math.max(lineStats.medianHeight * 1.6, 18)
+    : false;
+  const numericContextBefore = previousItem ? /[\d%]$/.test(previousItem.text) : false;
+
+  return raisedEnough && smallEnough && nearPrevious && !numericContextBefore;
+}
+
+function legacyIsSuperscriptReferenceText(text) {
+  return /^(?:[¹²³⁴⁵⁶⁷⁸⁹⁰]+|\d{1,3})$/.test(String(text || "").trim());
+}
+
+function median(values) {
+  if (!Array.isArray(values) || values.length === 0) {
+    return 0;
+  }
+
+  const sorted = values
+    .map((value) => Number(value) || 0)
+    .sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+
+  if (sorted.length % 2 === 0) {
+    return (sorted[middle - 1] + sorted[middle]) / 2;
+  }
+
+  return sorted[middle];
+}
+
+function isLikelySuperscriptReference(item, previousItem, lineStats) {
+  if (!item || !isSuperscriptReferenceText(item.text)) {
+    return false;
+  }
+
+  const unicodeSuperscript = /[\u00B9\u00B2\u00B3\u2070\u2074\u2075\u2076\u2077\u2078\u2079]/.test(item.text);
+  const raisedAmount = item.y - lineStats.baselineY;
+  const raisedEnough = unicodeSuperscript || raisedAmount >= Math.max(1, lineStats.medianHeight * 0.12);
+  const smallEnough = unicodeSuperscript
+    || item.height <= lineStats.medianHeight * 0.84
+    || item.width <= Math.max(8, lineStats.medianHeight * 0.68);
+  const nearPrevious = previousItem
+    ? item.x - previousItem.endX <= Math.max(lineStats.medianHeight * 1.6, 18)
+    : false;
+  const numericContextBefore = previousItem ? /[\d%]$/.test(previousItem.text) : false;
+
+  return raisedEnough && smallEnough && nearPrevious && !numericContextBefore;
+}
+
+function isSuperscriptReferenceText(text) {
+  return /^(?:[\u00B9\u00B2\u00B3\u2070\u2074\u2075\u2076\u2077\u2078\u2079]+|\d{1,3})$/.test(String(text || "").trim());
 }
 
 function linesToParagraphs(lines) {
@@ -643,10 +1067,44 @@ function linesToParagraphs(lines) {
 }
 
 function pushParagraph(paragraphs, lines) {
-  const text = normalizeWhitespace(lines.join(" "));
+  let text = "";
+
+  for (const line of lines) {
+    text = appendParagraphLine(text, line);
+  }
+
+  text = normalizeWhitespace(text);
   if (text) {
+    if (state.debugLayout) {
+      console.info("Study Reader: final paragraph text", {
+        text
+      });
+    }
     paragraphs.push(text);
   }
+}
+
+function appendParagraphLine(currentText, nextLineText) {
+  const nextText = normalizeWhitespace(nextLineText);
+  if (!nextText) {
+    return currentText;
+  }
+
+  if (!currentText) {
+    return nextText;
+  }
+
+  if (shouldMergeHyphenatedLineBreak(currentText, nextText)) {
+    return `${currentText.slice(0, -1)}${nextText}`;
+  }
+
+  return `${currentText} ${nextText}`;
+}
+
+function shouldMergeHyphenatedLineBreak(currentText, nextText) {
+  return /[A-Za-z]-$/.test(currentText)
+    && /^[a-z][a-z-]*/.test(nextText)
+    && !/\b(?:Figure|Table|Appendix|Fig)\s*-$/.test(currentText);
 }
 
 function paragraphToChunks(paragraph, pageNumber) {
@@ -802,7 +1260,7 @@ function startCurrentSentence() {
 
 function speakCurrentSentence() {
   const sentence = getCurrentSentence();
-  const speechText = sentence ? cleanForSpeech(sentence.text, state.speechFilters) : "";
+  const speechText = sentence ? buildSpeechText(sentence.text, state.speechFilters) : "";
 
   if (!sentence || !speechText) {
     const pageData = state.pageCache.get(state.currentPage);
@@ -830,6 +1288,16 @@ function speakCurrentSentence() {
   renderTextChunks();
   scrollCurrentSentenceIntoView();
   setStatus(currentSentenceLabel());
+
+  if (state.debugLayout) {
+    console.info("Study Reader: speech utterance text", {
+      pageNumber: state.currentPage,
+      paragraphIndex: getCurrentChunk()?.paragraphIndex ?? null,
+      sentenceIndex: state.currentSentenceIndex,
+      originalSentenceText: sentence.text,
+      speechText
+    });
+  }
 
   const utterance = new SpeechSynthesisUtterance(speechText);
   utterance.rate = state.prefs.rate;
@@ -1565,7 +2033,7 @@ function isSentenceSpeakable(pageData, chunkIndex, sentenceIndex) {
     return false;
   }
 
-  return Boolean(cleanForSpeech(sentence.text, state.speechFilters));
+  return Boolean(buildSpeechText(sentence.text, state.speechFilters));
 }
 
 function isParagraphSpeakable(pageNumber, paragraphIndex) {
@@ -1860,16 +2328,101 @@ function cleanForSpeech(text, options = DEFAULT_SPEECH_FILTERS) {
         .replace(/\bappendix\s+[A-Z]\b/gi, " ");
     }
 
-    return nextText
+    const finalText = nextText
       .replace(/\s+([,.;:!?])/g, "$1")
       .replace(/([([{])\s+/g, "$1")
       .replace(/\s+([)\]}])/g, "$1")
       .replace(/\s{2,}/g, " ")
       .replace(/\s*\n\s*/g, " ")
       .trim();
+
+    return finalText;
   } catch (_error) {
     return normalizeWhitespace(String(text || ""));
   }
+}
+
+function buildSpeechText(text, filters = DEFAULT_SPEECH_FILTERS) {
+  const originalText = String(text || "");
+  const afterSuperscriptCleanup = cleanSuperscriptReferencesForSpeech(originalText);
+  const finalText = cleanForSpeech(afterSuperscriptCleanup, filters);
+
+  if (state.debugLayout && /[\u00B9\u00B2\u00B3\u2070\u2074\u2075\u2076\u2077\u2078\u2079]|\n/.test(originalText)) {
+    console.info("Study Reader: speech cleanup", {
+      originalText,
+      afterSuperscriptCleanup,
+      afterCitationCleanup: finalText,
+      finalText
+    });
+  }
+
+  return finalText;
+}
+
+function cleanSuperscriptReferencesForSpeech(text) {
+  return String(text || "")
+    .replace(/<sup[^>]*>\s*\d{1,3}\s*<\/sup>/gi, "")
+    .replace(/[\u00B9\u00B2\u00B3\u2070\u2074\u2075\u2076\u2077\u2078\u2079]+/g, "")
+    .replace(/([A-Za-z])-\s*\n\s*([a-z])/g, "$1$2")
+    .replace(/\s*\n\s*/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .trim();
+}
+
+function runSuperscriptCleanupRegressionDebug() {
+  const sample = "In the literature on innovation,\u00B3 two types are usually distin-\nguished, process innovation and product innovation.";
+  const significanceSample = "The result was significant\u00B9 and meaningful.";
+  const numericSample = "In 2024, the result was 3.5%.";
+  const afterSuperscriptCleanup = cleanSuperscriptReferencesForSpeech(sample);
+  const afterCitationCleanup = cleanForSpeech(afterSuperscriptCleanup, {
+    ...DEFAULT_SPEECH_FILTERS,
+    skipCitations: true
+  });
+
+  console.info("Study Reader: superscript cleanup regression", {
+    sample,
+    afterSuperscriptCleanup,
+    afterCitationCleanup,
+    significanceSample,
+    significanceOutput: buildSpeechText(significanceSample, DEFAULT_SPEECH_FILTERS),
+    numericSample,
+    numericOutput: buildSpeechText(numericSample, DEFAULT_SPEECH_FILTERS),
+    expected: "In the literature on innovation, two types are usually distinguished, process innovation and product innovation."
+  });
+}
+
+function runSyntheticSuperscriptLineAssemblyDebug() {
+  const syntheticItems = [
+    { str: "In the literature on innovation,", transform: [12, 0, 0, 12, 65, 700], width: 210, height: 12 },
+    { str: "3", transform: [7, 0, 0, 7, 278, 708], width: 5, height: 7 },
+    { str: " two types are usually distin-", transform: [12, 0, 0, 12, 286, 700], width: 220, height: 12 },
+    { str: "guished, process innovation and product innovation.", transform: [12, 0, 0, 12, 65, 684], width: 390, height: 12 }
+  ];
+  const normalizedItems = extractStructuredTextItems(syntheticItems, -1);
+  const lines = groupTextItemsIntoLines(normalizedItems);
+  const paragraphTexts = linesToParagraphs(lines);
+  const paragraphText = paragraphTexts.join("\n\n");
+  const sentences = splitSentences(paragraphText).map((sentence) => sentence.text);
+  const speechText = buildSpeechText(paragraphText, DEFAULT_SPEECH_FILTERS);
+  const expected = "In the literature on innovation, two types are usually distinguished, process innovation and product innovation.";
+
+  console.info("Study Reader: synthetic superscript assembly regression", {
+    normalizedItems: normalizedItems.map((item) => ({
+      text: item.text,
+      x: item.x,
+      y: item.y,
+      width: item.width,
+      height: item.height,
+      transform: item.transform
+    })),
+    lineTexts: lines.map((line) => line.text),
+    paragraphText,
+    sentences,
+    speechText,
+    expected,
+    passed: paragraphText === expected && speechText === expected
+  });
 }
 
 function findReferencesStartParagraphIndex(paragraphTexts) {
