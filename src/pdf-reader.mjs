@@ -4,16 +4,21 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL("vendor/pdfjs/pdf
 
 const prefsApi = globalThis.StudyReaderPrefs;
 const snippetsApi = globalThis.StudyReaderSnippetStorage || globalThis.StudyReaderSnippets;
+const themeApi = globalThis.StudyReaderTheme;
 const DEFAULT_PREFS = prefsApi?.DEFAULT_PREFS || {
   rate: 1,
   voiceName: ""
 };
 const PDF_LAYOUT_STORAGE_KEY = "studyReaderPdfLayoutMode";
 const PDF_FOLLOW_STORAGE_KEY = "studyReaderPdfFollowReading";
+const PDF_SPEECH_FILTERS_STORAGE_KEY = "studyReaderPdfSpeechFilters";
 const PDF_LAYOUT_MODES = {
   AUTO: "auto",
   SINGLE: "single",
   TWO: "two"
+};
+const DEFAULT_SPEECH_FILTERS = {
+  skipCitations: false
 };
 
 const els = {
@@ -21,8 +26,7 @@ const els = {
   fileName: document.getElementById("fileName"),
   canvas: document.getElementById("pdfCanvas"),
   canvasWrap: document.getElementById("canvasWrap"),
-  pageStatus: document.getElementById("pageStatus"),
-  positionStatus: document.getElementById("positionStatus"),
+  compactStatus: document.getElementById("compactStatus"),
   readerStatus: document.getElementById("readerStatus"),
   textChunks: document.getElementById("textChunks"),
   play: document.getElementById("play"),
@@ -38,15 +42,23 @@ const els = {
   saveSentence: document.getElementById("saveSentence"),
   saveParagraph: document.getElementById("saveParagraph"),
   showPreview: document.getElementById("showPreview"),
+  showNavigator: document.getElementById("showNavigator"),
   rate: document.getElementById("rate"),
   rateValue: document.getElementById("rateValue"),
   voice: document.getElementById("voice"),
+  theme: document.getElementById("theme"),
   layoutMode: document.getElementById("layoutMode"),
   followReading: document.getElementById("followReading"),
+  skipCitations: document.getElementById("skipCitations"),
   textPreviewDialog: document.getElementById("textPreviewDialog"),
   textPreviewMeta: document.getElementById("textPreviewMeta"),
   textPreviewContent: document.getElementById("textPreviewContent"),
-  closePreview: document.getElementById("closePreview")
+  closePreview: document.getElementById("closePreview"),
+  readingNavigatorDialog: document.getElementById("readingNavigatorDialog"),
+  readingNavigatorMeta: document.getElementById("readingNavigatorMeta"),
+  readingNavigatorList: document.getElementById("readingNavigatorList"),
+  navigatorSearch: document.getElementById("navigatorSearch"),
+  closeNavigator: document.getElementById("closeNavigator")
 };
 
 const state = {
@@ -61,6 +73,7 @@ const state = {
   prefs: { ...DEFAULT_PREFS },
   layoutMode: getStoredLayoutMode(),
   followReadingPosition: getStoredFollowReading(),
+  speechFilters: { ...DEFAULT_SPEECH_FILTERS },
   debugLayout: isPdfLayoutDebugEnabled(),
   status: "idle",
   utterance: null,
@@ -75,9 +88,14 @@ init();
 
 async function init() {
   state.prefs = prefsApi ? await prefsApi.getPrefs() : normalizePrefs(DEFAULT_PREFS);
+  state.speechFilters = await loadSpeechFilters();
+  if (themeApi?.getThemeMode) {
+    els.theme.value = await themeApi.getThemeMode();
+  }
   els.rate.value = String(state.prefs.rate);
   els.layoutMode.value = state.layoutMode;
   els.followReading.checked = state.followReadingPosition;
+  els.skipCitations.checked = state.speechFilters.skipCitations;
   updateRateLabel();
   wireEvents();
   populateVoices();
@@ -85,6 +103,12 @@ async function init() {
 
   if ("speechSynthesis" in window) {
     window.speechSynthesis.onvoiceschanged = populateVoices;
+  }
+
+  if (themeApi?.watchTheme) {
+    themeApi.watchTheme(({ mode }) => {
+      els.theme.value = mode;
+    });
   }
 
   const params = new URLSearchParams(location.search);
@@ -108,12 +132,20 @@ function wireEvents() {
   els.saveSentence.addEventListener("click", () => saveCurrentSnippet("sentence"));
   els.saveParagraph.addEventListener("click", () => saveCurrentSnippet("paragraph"));
   els.showPreview.addEventListener("click", showExtractedTextPreview);
+  els.showNavigator.addEventListener("click", openReadingNavigator);
   els.closePreview.addEventListener("click", closeExtractedTextPreview);
+  els.closeNavigator.addEventListener("click", closeReadingNavigator);
   els.textPreviewDialog.addEventListener("click", (event) => {
     if (event.target === els.textPreviewDialog) {
       closeExtractedTextPreview();
     }
   });
+  els.readingNavigatorDialog.addEventListener("click", (event) => {
+    if (event.target === els.readingNavigatorDialog) {
+      closeReadingNavigator();
+    }
+  });
+  els.navigatorSearch.addEventListener("input", renderReadingNavigatorList);
 
   els.rate.addEventListener("input", async () => {
     state.prefs.rate = Number(els.rate.value);
@@ -126,6 +158,14 @@ function wireEvents() {
     await savePrefs();
   });
 
+  els.theme.addEventListener("change", async () => {
+    if (!themeApi?.saveThemeMode) {
+      return;
+    }
+
+    els.theme.value = await themeApi.saveThemeMode(els.theme.value);
+  });
+
   els.layoutMode.addEventListener("change", async () => {
     await applyLayoutModeChange(els.layoutMode.value);
   });
@@ -133,6 +173,14 @@ function wireEvents() {
   els.followReading.addEventListener("change", () => {
     state.followReadingPosition = els.followReading.checked;
     storeFollowReading(state.followReadingPosition);
+  });
+
+  els.skipCitations.addEventListener("change", async () => {
+    state.speechFilters = {
+      ...state.speechFilters,
+      skipCitations: els.skipCitations.checked
+    };
+    await saveSpeechFilters(state.speechFilters);
   });
 }
 
@@ -187,6 +235,9 @@ async function applyLayoutModeChange(nextMode) {
 
   await preloadTextContent();
   await renderPage(targetPage);
+  if (els.readingNavigatorDialog.open) {
+    renderReadingNavigatorList();
+  }
   setStatus("Ready");
   updateControls();
 }
@@ -212,6 +263,9 @@ async function loadPdf(bytes, name) {
 
   await preloadTextContent();
   await renderPage(1);
+  if (els.readingNavigatorDialog.open) {
+    renderReadingNavigatorList();
+  }
 
   if (!state.documentHasText) {
     showImageOnlyMessage();
@@ -259,7 +313,6 @@ async function renderPage(pageNumber) {
   state.currentChunkIndex = 0;
   state.currentSentenceIndex = 0;
   renderTextChunks();
-  updatePageStatus();
   updateControls();
 }
 
@@ -679,12 +732,21 @@ function renderTextChunks() {
 }
 
 function playFromCurrentChunk() {
-  const sentence = getCurrentSentence();
-  if (!sentence) {
-    setStatus("No selectable text was found on this page.");
+  const pageData = state.pageCache.get(state.currentPage);
+  const position = pageData
+    ? findSpeakableSentencePosition(pageData, state.currentChunkIndex, state.currentSentenceIndex, {
+      direction: 1,
+      includeCurrent: true
+    })
+    : null;
+
+  if (!position) {
+    setStatus("No speakable text remains on this page.");
     return;
   }
 
+  state.currentChunkIndex = position.chunkIndex;
+  state.currentSentenceIndex = position.sentenceIndex;
   startCurrentSentence();
 }
 
@@ -696,8 +758,27 @@ function startCurrentSentence() {
 
 function speakCurrentSentence() {
   const sentence = getCurrentSentence();
-  if (!sentence) {
-    stopReading();
+  const speechText = sentence ? cleanForSpeech(sentence.text, state.speechFilters) : "";
+
+  if (!sentence || !speechText) {
+    const pageData = state.pageCache.get(state.currentPage);
+    const nextPosition = pageData
+      ? findSpeakableSentencePosition(pageData, state.currentChunkIndex, state.currentSentenceIndex, {
+        direction: 1,
+        includeCurrent: false
+      })
+      : null;
+
+    if (nextPosition) {
+      state.currentChunkIndex = nextPosition.chunkIndex;
+      state.currentSentenceIndex = nextPosition.sentenceIndex;
+      speakCurrentSentence();
+      return;
+    }
+
+    state.status = "idle";
+    setStatus("Finished page.");
+    updateControls();
     return;
   }
 
@@ -706,7 +787,7 @@ function speakCurrentSentence() {
   scrollCurrentSentenceIntoView();
   setStatus(currentSentenceLabel());
 
-  const utterance = new SpeechSynthesisUtterance(sentence.text);
+  const utterance = new SpeechSynthesisUtterance(speechText);
   utterance.rate = state.prefs.rate;
 
   const voice = findPreferredVoice(state.prefs.voiceName);
@@ -943,20 +1024,11 @@ function currentPositionLabel() {
   if (!pageData || !chunk) {
     return state.documentHasText
       ? `Page ${state.currentPage} of ${state.pdf.numPages}`
-      : `Page ${state.currentPage} of ${state.pdf.numPages} / No selectable text`;
+      : `Page ${state.currentPage} | No selectable text`;
   }
 
   const sentenceNumber = chunk.paragraphSentenceStart + state.currentSentenceIndex + 1;
-  return `Paragraph ${chunk.paragraphIndex + 1}/${pageData.paragraphCount} / Sentence ${sentenceNumber}/${chunk.paragraphSentenceCount}`;
-}
-
-function updatePageStatus() {
-  if (!state.pdf) {
-    els.pageStatus.textContent = "No PDF loaded";
-    return;
-  }
-
-  els.pageStatus.textContent = `Page ${state.currentPage} of ${state.pdf.numPages}`;
+  return `Page ${state.currentPage} | Paragraph ${chunk.paragraphIndex + 1}/${pageData.paragraphCount} | Sentence ${sentenceNumber}/${chunk.paragraphSentenceCount}`;
 }
 
 function updateControls() {
@@ -986,8 +1058,9 @@ function updateControls() {
   els.previousPage.disabled = !hasPdf || state.currentPage <= 1;
   els.saveSentence.disabled = !hasText;
   els.saveParagraph.disabled = !hasText;
-  updatePageStatus();
-  els.positionStatus.textContent = currentPositionLabel();
+  els.showNavigator.disabled = !hasPdf || !state.documentHasText;
+  els.compactStatus.textContent = currentPositionLabel();
+  syncNavigatorActiveState();
 }
 
 function showImageOnlyMessage() {
@@ -1015,6 +1088,23 @@ function showExtractedTextPreview() {
 function closeExtractedTextPreview() {
   if (els.textPreviewDialog.open) {
     els.textPreviewDialog.close();
+  }
+}
+
+function openReadingNavigator() {
+  renderReadingNavigatorList();
+
+  if (!els.readingNavigatorDialog.open) {
+    els.readingNavigatorDialog.showModal();
+  }
+
+  els.navigatorSearch.focus();
+  els.navigatorSearch.select();
+}
+
+function closeReadingNavigator() {
+  if (els.readingNavigatorDialog.open) {
+    els.readingNavigatorDialog.close();
   }
 }
 
@@ -1097,6 +1187,185 @@ function currentReaderStatus() {
   return "Ready";
 }
 
+function getNavigatorParagraphRecords() {
+  if (!state.pdf) {
+    return [];
+  }
+
+  const records = [];
+
+  for (let pageNumber = 1; pageNumber <= state.pdf.numPages; pageNumber += 1) {
+    const pageData = state.pageCache.get(pageNumber);
+    if (!pageData) {
+      continue;
+    }
+
+    pageData.paragraphs.forEach((paragraph, paragraphIndex) => {
+      records.push({
+        id: `${pageNumber}:${paragraphIndex}`,
+        pageNumber,
+        paragraphIndex,
+        text: paragraph.text,
+        preview: formatParagraphPreview(paragraph.text)
+      });
+    });
+  }
+
+  return records;
+}
+
+function renderReadingNavigatorList() {
+  const records = getNavigatorParagraphRecords();
+  const query = normalizeWhitespace(els.navigatorSearch.value || "").toLowerCase();
+  const filteredRecords = query
+    ? records.filter((record) => buildNavigatorSearchText(record).includes(query))
+    : records;
+
+  if (!state.pdf) {
+    els.readingNavigatorMeta.textContent = "No PDF loaded.";
+  } else {
+    els.readingNavigatorMeta.textContent = `${filteredRecords.length} of ${records.length} paragraphs shown.`;
+  }
+
+  els.readingNavigatorList.replaceChildren();
+
+  if (!state.pdf) {
+    els.readingNavigatorList.appendChild(makeNavigatorEmptyState("Open a PDF to browse paragraphs."));
+    return;
+  }
+
+  if (records.length === 0) {
+    els.readingNavigatorList.appendChild(makeNavigatorEmptyState("No extracted paragraphs are available for this PDF."));
+    return;
+  }
+
+  if (filteredRecords.length === 0) {
+    els.readingNavigatorList.appendChild(makeNavigatorEmptyState("No paragraphs match your search."));
+    return;
+  }
+
+  filteredRecords.forEach((record) => {
+    const item = document.createElement("section");
+    item.className = "navigator-item";
+    item.dataset.pageNumber = String(record.pageNumber);
+    item.dataset.paragraphIndex = String(record.paragraphIndex);
+    item.dataset.active = String(isCurrentParagraph(record.pageNumber, record.paragraphIndex));
+
+    const header = document.createElement("div");
+    header.className = "navigator-item-header";
+
+    const title = document.createElement("p");
+    title.className = "navigator-item-title";
+    title.textContent = `Page ${record.pageNumber} · Paragraph ${record.paragraphIndex + 1}`;
+    header.appendChild(title);
+
+    const actions = document.createElement("div");
+    actions.className = "navigator-item-actions";
+
+    const startButton = document.createElement("button");
+    startButton.type = "button";
+    startButton.textContent = "Start here";
+    startButton.addEventListener("click", async () => {
+      await jumpToParagraph(record.pageNumber, record.paragraphIndex, { play: false });
+    });
+    actions.appendChild(startButton);
+
+    const playButton = document.createElement("button");
+    playButton.type = "button";
+    playButton.className = "primary";
+    playButton.textContent = "Play from here";
+    playButton.addEventListener("click", async () => {
+      await jumpToParagraph(record.pageNumber, record.paragraphIndex, { play: true });
+    });
+    actions.appendChild(playButton);
+
+    header.appendChild(actions);
+    item.appendChild(header);
+
+    const preview = document.createElement("p");
+    preview.className = "navigator-item-preview";
+    preview.textContent = record.preview;
+    item.appendChild(preview);
+
+    els.readingNavigatorList.appendChild(item);
+  });
+}
+
+function makeNavigatorEmptyState(message) {
+  const empty = document.createElement("div");
+  empty.className = "navigator-empty";
+  empty.textContent = message;
+  return empty;
+}
+
+function buildNavigatorSearchText(record) {
+  return normalizeWhitespace(`page ${record.pageNumber} paragraph ${record.paragraphIndex + 1} ${record.text}`).toLowerCase();
+}
+
+function formatParagraphPreview(text) {
+  const normalized = normalizeWhitespace(text);
+  if (normalized.length <= 200) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, 197).trimEnd()}...`;
+}
+
+function isCurrentParagraph(pageNumber, paragraphIndex) {
+  const currentChunk = getCurrentChunk();
+  return state.currentPage === pageNumber && currentChunk?.paragraphIndex === paragraphIndex;
+}
+
+function syncNavigatorActiveState() {
+  if (!els.readingNavigatorDialog.open) {
+    return;
+  }
+
+  const activePage = state.currentPage;
+  const activeParagraph = getCurrentChunk()?.paragraphIndex;
+
+  els.readingNavigatorList.querySelectorAll(".navigator-item").forEach((item) => {
+    const matches = Number(item.dataset.pageNumber) === activePage
+      && Number(item.dataset.paragraphIndex) === activeParagraph;
+    item.dataset.active = String(matches);
+  });
+}
+
+async function jumpToParagraph(pageNumber, paragraphIndex, { play = false } = {}) {
+  if (!state.pdf) {
+    return false;
+  }
+
+  cancelCurrentSpeech();
+  state.status = "idle";
+
+  await renderPage(pageNumber);
+
+  const pageData = state.pageCache.get(pageNumber);
+  const nextPosition = findParagraphStartPosition(pageData, paragraphIndex);
+  if (!nextPosition) {
+    setStatus("Could not find that paragraph.");
+    updateControls();
+    return false;
+  }
+
+  state.currentChunkIndex = nextPosition.chunkIndex;
+  state.currentSentenceIndex = 0;
+  renderTextChunks();
+  scrollCurrentSentenceIntoView();
+  updateControls();
+
+  if (play) {
+    closeReadingNavigator();
+    startCurrentSentence();
+    return true;
+  }
+
+  closeReadingNavigator();
+  setStatus(`Ready to read from Page ${pageNumber}, Paragraph ${paragraphIndex + 1}.`);
+  return true;
+}
+
 function getAdjacentSentencePosition(pageData, chunkIndex, sentenceIndex, direction) {
   const chunk = pageData.chunks[chunkIndex];
   if (!chunk) {
@@ -1124,6 +1393,24 @@ function getAdjacentSentencePosition(pageData, chunkIndex, sentenceIndex, direct
     chunkIndex: nextChunkIndex,
     sentenceIndex: nextSentenceIndex
   };
+}
+
+function findSpeakableSentencePosition(pageData, chunkIndex, sentenceIndex, { direction = 1, includeCurrent = false } = {}) {
+  let position = includeCurrent
+    ? { chunkIndex, sentenceIndex }
+    : getAdjacentSentencePosition(pageData, chunkIndex, sentenceIndex, direction);
+
+  while (position) {
+    const sentence = pageData.chunks[position.chunkIndex]?.sentences[position.sentenceIndex];
+    const speechText = sentence ? cleanForSpeech(sentence.text, state.speechFilters) : "";
+    if (speechText) {
+      return position;
+    }
+
+    position = getAdjacentSentencePosition(pageData, position.chunkIndex, position.sentenceIndex, direction);
+  }
+
+  return null;
 }
 
 function findParagraphStartPosition(pageData, paragraphIndex) {
@@ -1314,6 +1601,67 @@ function storeFollowReading(value) {
   } catch (_error) {
     // Ignore localStorage write failures in restricted contexts.
   }
+}
+
+async function loadSpeechFilters() {
+  if (chrome?.storage?.local) {
+    try {
+      const stored = await chrome.storage.local.get({
+        [PDF_SPEECH_FILTERS_STORAGE_KEY]: DEFAULT_SPEECH_FILTERS
+      });
+      return normalizeSpeechFilters(stored[PDF_SPEECH_FILTERS_STORAGE_KEY]);
+    } catch (_error) {
+      // Fall through to local fallback.
+    }
+  }
+
+  try {
+    return normalizeSpeechFilters(JSON.parse(localStorage.getItem(PDF_SPEECH_FILTERS_STORAGE_KEY) || "null"));
+  } catch (_error) {
+    return { ...DEFAULT_SPEECH_FILTERS };
+  }
+}
+
+async function saveSpeechFilters(filters) {
+  const normalized = normalizeSpeechFilters(filters);
+
+  if (chrome?.storage?.local) {
+    try {
+      await chrome.storage.local.set({ [PDF_SPEECH_FILTERS_STORAGE_KEY]: normalized });
+      return;
+    } catch (_error) {
+      // Fall through to local fallback.
+    }
+  }
+
+  try {
+    localStorage.setItem(PDF_SPEECH_FILTERS_STORAGE_KEY, JSON.stringify(normalized));
+  } catch (_error) {
+    // Ignore localStorage write failures in restricted contexts.
+  }
+}
+
+function normalizeSpeechFilters(filters) {
+  return {
+    skipCitations: Boolean(filters?.skipCitations)
+  };
+}
+
+function cleanForSpeech(text, options = DEFAULT_SPEECH_FILTERS) {
+  let nextText = String(text || "");
+
+  if (options.skipCitations) {
+    nextText = nextText
+      .replace(/\[(?:\s*\d+\s*(?:[-–]\s*\d+)?\s*(?:,\s*\d+\s*(?:[-–]\s*\d+)?)*)\]/g, " ")
+      .replace(/\((?:[^()]*\b(?:19|20)\d{2}[a-z]?\b[^()]*)\)/gi, " ")
+      .replace(/\((?:pp?\.?\s*\d+(?:\s*[-–]\s*\d+)?)\)/gi, " ");
+  }
+
+  return nextText
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s*\n\s*/g, " ")
+    .trim();
 }
 
 

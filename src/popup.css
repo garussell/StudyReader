@@ -1,6 +1,38 @@
 :root {
-  color-scheme: light;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --bg: #f6f8fb;
+  --panel-bg: #ffffff;
+  --text: #1f2933;
+  --muted-text: #586474;
+  --border: #ccd6e1;
+  --button-bg: #ffffff;
+  --button-text: #1f2933;
+  --button-hover: #eef5ff;
+  --danger: #b42318;
+  --danger-hover-bg: #fff0ee;
+  --accent: #2764c5;
+  --accent-hover: #1f56ad;
+  --accent-text: #ffffff;
+  --shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: #10161d;
+  --panel-bg: #1a2430;
+  --text: #e7edf5;
+  --muted-text: #9aaabd;
+  --border: #334355;
+  --button-bg: #22303d;
+  --button-text: #e7edf5;
+  --button-hover: #2a3a4a;
+  --danger: #ff8c80;
+  --danger-hover-bg: #4a2624;
+  --accent: #5b9cff;
+  --accent-hover: #4d8ef0;
+  --accent-text: #08111f;
+  --shadow: 0 14px 32px rgba(0, 0, 0, 0.3);
+  color-scheme: dark;
 }
 
 * {
@@ -10,12 +42,13 @@
 body {
   margin: 0;
   width: 320px;
-  color: #1f2933;
-  background: #f6f8fb;
+  color: var(--text);
+  background: var(--bg);
 }
 
 .popup {
   padding: 16px;
+  background: var(--bg);
 }
 
 .header {
@@ -34,13 +67,13 @@ h1 {
 .status {
   min-height: 18px;
   margin: 4px 0 0;
-  color: #586474;
+  color: var(--muted-text);
   font-size: 12px;
 }
 
 .helper-text {
   margin: -2px 0 0;
-  color: #607084;
+  color: var(--muted-text);
   font-size: 12px;
 }
 
@@ -53,7 +86,7 @@ h1 {
 .settings {
   margin-top: 16px;
   padding-top: 14px;
-  border-top: 1px solid #dce3ec;
+  border-top: 1px solid var(--border);
 }
 
 .grid {
@@ -75,17 +108,18 @@ button {
   align-items: center;
   justify-content: center;
   min-height: 36px;
-  border: 1px solid #ccd6e1;
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0 10px;
-  color: #1f2933;
-  background: #ffffff;
+  color: var(--button-text);
+  background: var(--button-bg);
+  box-shadow: var(--shadow);
   cursor: pointer;
 }
 
 .file-button:hover,
 button:hover {
-  background: #eef5ff;
+  background: var(--button-hover);
 }
 
 button:active {
@@ -93,22 +127,22 @@ button:active {
 }
 
 .primary {
-  border-color: #2764c5;
-  color: #ffffff;
-  background: #2764c5;
+  border-color: var(--accent);
+  color: var(--accent-text);
+  background: var(--accent);
 }
 
 .primary:hover {
-  background: #1f56ad;
+  background: var(--accent-hover);
 }
 
 .danger {
-  border-color: #b42318;
-  color: #b42318;
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 .danger:hover {
-  background: #fff0ee;
+  background: var(--danger-hover-bg);
 }
 
 .visually-hidden {
@@ -123,7 +157,7 @@ button:active {
 label {
   display: flex;
   justify-content: space-between;
-  color: #3f4b5a;
+  color: var(--text);
   font-size: 12px;
   font-weight: 650;
 }
@@ -131,11 +165,11 @@ label {
 select {
   width: 100%;
   min-height: 36px;
-  border: 1px solid #ccd6e1;
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0 8px;
-  color: #1f2933;
-  background: #ffffff;
+  color: var(--text);
+  background: var(--panel-bg);
 }
 
 input[type="range"] {
