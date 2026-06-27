@@ -11,6 +11,12 @@
     rate: 1,
     voiceName: ""
   };
+  const THEME_STORAGE_KEY = themeApi?.STORAGE_KEY || "studyReaderTheme";
+  const THEME_DEBUG = false;
+  const SYSTEM_THEME_QUERY = "(prefers-color-scheme: dark)";
+  const systemThemeMediaQuery = typeof window.matchMedia === "function"
+    ? window.matchMedia(SYSTEM_THEME_QUERY)
+    : null;
 
   const READABLE_SELECTOR = [
     "p",
@@ -44,7 +50,11 @@
     miniStatusText: "Ready",
     miniPreviewText: "Select text or click a paragraph first.",
     statusRestoreTimer: null,
-    resolvedTheme: "light"
+    toastTimer: null,
+    miniToast: null,
+    themeMode: "system",
+    resolvedTheme: "light",
+    themeReadyPromise: null
   };
 
   init();
@@ -52,6 +62,7 @@
   async function init() {
     bindStorageListener();
     bindVoiceEvents();
+    bindThemeListeners();
     document.addEventListener("click", rememberClickedReadableElement, true);
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message?.type === "STUDY_READER_PING") {
@@ -71,12 +82,8 @@
     });
 
     state.prefs = prefsApi ? await prefsApi.getPrefs() : normalizePrefs(DEFAULT_PREFS);
-    if (themeApi?.watchTheme) {
-      themeApi.watchTheme(({ resolvedTheme }) => {
-        state.resolvedTheme = resolvedTheme;
-        applyMiniPlayerTheme();
-      });
-    }
+    state.themeReadyPromise = refreshThemeState();
+    await state.themeReadyPromise;
     syncMiniControlsFromPrefs();
     populateVoices();
   }
@@ -97,6 +104,41 @@
     });
   }
 
+  function bindThemeListeners() {
+    if (chrome?.storage?.onChanged) {
+      chrome.storage.onChanged.addListener((changes, areaName) => {
+        if (areaName !== "local" || !Object.prototype.hasOwnProperty.call(changes, THEME_STORAGE_KEY)) {
+          return;
+        }
+
+        const nextTheme = typeof changes[THEME_STORAGE_KEY]?.newValue === "string"
+          ? changes[THEME_STORAGE_KEY].newValue
+          : undefined;
+        refreshThemeState(nextTheme).catch(() => {
+          // Ignore transient content-script theme refresh failures.
+        });
+      });
+    }
+
+    if (!systemThemeMediaQuery) {
+      return;
+    }
+
+    const handleSystemThemeChange = () => {
+      if (normalizeSavedTheme(state.themeMode) === "system") {
+        refreshThemeState("system").catch(() => {
+          // Ignore transient content-script theme refresh failures.
+        });
+      }
+    };
+
+    if (typeof systemThemeMediaQuery.addEventListener === "function") {
+      systemThemeMediaQuery.addEventListener("change", handleSystemThemeChange);
+    } else if (typeof systemThemeMediaQuery.addListener === "function") {
+      systemThemeMediaQuery.addListener(handleSystemThemeChange);
+    }
+  }
+
   function bindVoiceEvents() {
     if (!("speechSynthesis" in window)) {
       return;
@@ -111,6 +153,7 @@
   }
 
   async function handleCommand(payload = {}) {
+    await ensureThemeState();
     ensureMiniPlayer();
 
     if (payload.command === "UPDATE_PREFS") {
@@ -693,7 +736,7 @@
     }
 
     const player = document.createElement("div");
-    player.className = "study-reader-mini-player";
+    player.className = "study-reader-toolbar study-reader-mini-player";
     player.setAttribute("role", "region");
     player.setAttribute("aria-label", "Study Reader mini-player");
 
@@ -704,13 +747,19 @@
     status.className = "study-reader-mini-status";
     status.textContent = state.miniStatusText;
 
+    const headerActions = document.createElement("div");
+    headerActions.className = "study-reader-mini-header-actions";
+
+    const menuButton = makeMiniButton("Menu", "study-reader-mini-menu", () => openMainMenu());
     const collapseButton = makeMiniButton("-", "study-reader-mini-collapse", () => {
       const collapsed = player.dataset.collapsed === "true";
       player.dataset.collapsed = String(!collapsed);
       collapseButton.textContent = collapsed ? "-" : "+";
     });
+    const closeButton = makeMiniButton("Close", "study-reader-mini-close", () => closeMiniPlayer());
 
-    header.append(status, collapseButton);
+    headerActions.append(menuButton, collapseButton, closeButton);
+    header.append(status, headerActions);
 
     const preview = document.createElement("div");
     preview.className = "study-reader-mini-preview";
@@ -799,7 +848,10 @@
       previousSentence: previousSentenceButton,
       nextSentence: nextSentenceButton,
       previousParagraph: previousParagraphButton,
-      nextParagraph: nextParagraphButton
+      nextParagraph: nextParagraphButton,
+      menu: menuButton,
+      close: closeButton,
+      collapse: collapseButton
     };
 
     applyMiniPlayerTheme();
@@ -813,7 +865,19 @@
       return;
     }
 
-    state.miniPlayer.dataset.theme = state.resolvedTheme || "light";
+    state.miniPlayer.dataset.themeMode = normalizeSavedTheme(state.themeMode);
+    state.miniPlayer.dataset.theme = resolveStudyReaderTheme(state.themeMode);
+    logThemeDebug("toolbar", state.miniPlayer);
+  }
+
+  function applyMiniToastTheme() {
+    if (!state.miniToast) {
+      return;
+    }
+
+    state.miniToast.dataset.themeMode = normalizeSavedTheme(state.themeMode);
+    state.miniToast.dataset.theme = resolveStudyReaderTheme(state.themeMode);
+    logThemeDebug("toast", state.miniToast);
   }
 
   function makeMiniGroup(title) {
@@ -885,6 +949,65 @@
     state.miniButtons.nextSentence.disabled = !hasLoadedPlan || atEnd;
     state.miniButtons.previousParagraph.disabled = !hasLoadedPlan || state.currentParagraphIndex <= 0;
     state.miniButtons.nextParagraph.disabled = !hasLoadedPlan || state.currentParagraphIndex >= state.plan.paragraphs.length - 1;
+  }
+
+  async function openMainMenu() {
+    closeMiniPlayer();
+
+    try {
+      const response = await chrome.runtime.sendMessage({ type: "STUDY_READER_OPEN_POPUP" });
+      if (response?.ok && response?.opened) {
+        return;
+      }
+    } catch (_error) {
+      // Fall through to user guidance toast.
+    }
+
+    showMiniToast("Toolbar closed. Click the Study Reader extension icon to reopen the menu.");
+  }
+
+  function closeMiniPlayer() {
+    stopReading();
+    clearTimeout(state.statusRestoreTimer);
+    state.plan = null;
+    state.currentParagraphIndex = 0;
+    state.currentSentenceIndex = 0;
+    state.lastReadableElement = null;
+    state.miniStatusText = "Ready";
+    state.miniPreviewText = "Select text or click a paragraph first.";
+
+    if (state.miniPlayer?.isConnected) {
+      state.miniPlayer.remove();
+    }
+
+    state.miniPlayer = null;
+    state.miniStatus = null;
+    state.miniPreview = null;
+    state.miniRate = null;
+    state.miniRateValue = null;
+    state.miniVoice = null;
+    state.miniButtons = {};
+  }
+
+  function showMiniToast(message) {
+    clearTimeout(state.toastTimer);
+
+    if (!state.miniToast || !document.contains(state.miniToast)) {
+      const toast = document.createElement("div");
+      toast.className = "study-reader-mini-toast";
+      state.miniToast = toast;
+      applyMiniToastTheme();
+      document.documentElement.appendChild(toast);
+    }
+
+    state.miniToast.textContent = message;
+    state.miniToast.hidden = false;
+
+    state.toastTimer = setTimeout(() => {
+      if (state.miniToast) {
+        state.miniToast.hidden = true;
+      }
+    }, 2600);
   }
 
   function syncMiniControlsFromPrefs() {
@@ -1078,5 +1201,83 @@
     }
 
     return state.miniStatusText || "Ready";
+  }
+
+  async function ensureThemeState() {
+    if (!state.themeReadyPromise) {
+      state.themeReadyPromise = refreshThemeState();
+    }
+
+    await state.themeReadyPromise;
+  }
+
+  async function loadSavedTheme() {
+    if (chrome?.storage?.local) {
+      try {
+        const stored = await chrome.storage.local.get({ [THEME_STORAGE_KEY]: "system" });
+        return normalizeSavedTheme(stored[THEME_STORAGE_KEY]);
+      } catch (_error) {
+        // Fall through to theme helper and finally default.
+      }
+    }
+
+    if (themeApi?.getThemeMode) {
+      try {
+        return normalizeSavedTheme(await themeApi.getThemeMode());
+      } catch (_error) {
+        // Fall through to default.
+      }
+    }
+
+    return "system";
+  }
+
+  async function refreshThemeState(nextTheme) {
+    const savedTheme = normalizeSavedTheme(
+      nextTheme === undefined ? await loadSavedTheme() : nextTheme
+    );
+    const resolvedTheme = resolveStudyReaderTheme(savedTheme);
+
+    state.themeMode = savedTheme;
+    state.resolvedTheme = resolvedTheme;
+
+    applyMiniPlayerTheme();
+    applyMiniToastTheme();
+    logThemeDebug("refresh");
+
+    return {
+      savedTheme,
+      resolvedTheme
+    };
+  }
+
+  function normalizeSavedTheme(theme) {
+    return theme === "light" || theme === "dark" ? theme : "system";
+  }
+
+  function resolveStudyReaderTheme(savedTheme) {
+    const normalized = normalizeSavedTheme(savedTheme);
+    if (normalized === "dark") {
+      return "dark";
+    }
+
+    if (normalized === "light") {
+      return "light";
+    }
+
+    return systemThemeMediaQuery?.matches ? "dark" : "light";
+  }
+
+  function logThemeDebug(target, root) {
+    if (!THEME_DEBUG) {
+      return;
+    }
+
+    console.info("Study Reader web theme", {
+      target,
+      savedTheme: state.themeMode,
+      resolvedTheme: state.resolvedTheme,
+      appliedTheme: root?.dataset?.theme || null
+    });
   }
 })();

@@ -105,10 +105,51 @@
               <span class="toggle-option-text">Follow reading position</span>
               <input id="followReading" type="checkbox" checked>
             </label>
-            <label class="toggle-option" for="skipCitations">
-              <span class="toggle-option-text">Skip citations</span>
-              <input id="skipCitations" type="checkbox">
-            </label>
+            <div id="filterMenuWrap" class="filter-menu-wrap">
+              <button
+                id="filterMenuButton"
+                class="filter-menu-button"
+                type="button"
+                aria-haspopup="true"
+                aria-expanded="false"
+                aria-controls="filterMenuPanel"
+              >
+                <span>Reading Filters</span>
+                <span id="filterMenuSummary" class="filter-menu-summary">Off</span>
+              </button>
+              <div id="filterMenuPanel" class="filter-menu-panel" hidden>
+                <div class="filter-menu-header">
+                  <p class="filter-menu-title">Reading Filters</p>
+                  <p class="filter-menu-subtitle">Affects spoken text only.</p>
+                </div>
+                <div class="filter-menu-list">
+                  <label class="filter-option" for="skipCitations">
+                    <span class="filter-option-text">Skip citations</span>
+                    <input id="skipCitations" type="checkbox">
+                  </label>
+                  <label class="filter-option" for="skipParentheticalText">
+                    <span class="filter-option-text">Skip parenthetical text</span>
+                    <input id="skipParentheticalText" type="checkbox">
+                  </label>
+                  <label class="filter-option" for="skipBracketCitations">
+                    <span class="filter-option-text">Skip bracket citations</span>
+                    <input id="skipBracketCitations" type="checkbox">
+                  </label>
+                  <label class="filter-option" for="skipUrlsDois">
+                    <span class="filter-option-text">Skip URLs/DOIs</span>
+                    <input id="skipUrlsDois" type="checkbox">
+                  </label>
+                  <label class="filter-option" for="skipFigureTableReferences">
+                    <span class="filter-option-text">Skip figure/table references</span>
+                    <input id="skipFigureTableReferences" type="checkbox">
+                  </label>
+                  <label class="filter-option" for="stopBeforeReferencesSection">
+                    <span class="filter-option-text">Stop before References section</span>
+                    <input id="stopBeforeReferencesSection" type="checkbox">
+                  </label>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
