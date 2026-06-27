@@ -1,5 +1,6 @@
 const prefsApi = globalThis.StudyReaderPrefs;
 const snippetsApi = globalThis.StudyReaderSnippetStorage || globalThis.StudyReaderSnippets;
+const themeApi = globalThis.StudyReaderTheme;
 const DEFAULT_PREFS = prefsApi?.DEFAULT_PREFS || {
   rate: 1,
   voiceName: ""
@@ -9,6 +10,7 @@ const statusEl = document.getElementById("status");
 const rateEl = document.getElementById("rate");
 const rateValueEl = document.getElementById("rateValue");
 const voiceEl = document.getElementById("voice");
+const themeEl = document.getElementById("theme");
 const snippetCountEl = document.getElementById("snippetCount");
 
 const buttons = {
@@ -29,6 +31,9 @@ document.addEventListener("DOMContentLoaded", init);
 
 async function init() {
   prefs = prefsApi ? await prefsApi.getPrefs() : { ...DEFAULT_PREFS };
+  if (themeApi?.getThemeMode) {
+    themeEl.value = await themeApi.getThemeMode();
+  }
   rateEl.value = String(prefs.rate);
   updateRateLabel();
   await updateSnippetCount();
@@ -47,10 +52,21 @@ async function init() {
       }
     });
   }
+
+  if (themeApi?.watchTheme) {
+    themeApi.watchTheme(({ mode }) => {
+      themeEl.value = mode;
+    });
+  }
 }
 
 function wireControls() {
-  buttons.readSelection.addEventListener("click", () => sendCommand("READ_SELECTION"));
+  buttons.readSelection.addEventListener("click", async () => {
+    const ok = await sendCommand("READ_SELECTION");
+    if (ok) {
+      window.close();
+    }
+  });
   buttons.openPdfReader.addEventListener("click", openPdfReader);
   buttons.openSnippets.addEventListener("click", openSnippetsManager);
   buttons.pause.addEventListener("click", () => sendCommand("PAUSE"));
@@ -76,6 +92,14 @@ function wireControls() {
       voiceName: voiceEl.value
     });
     sendCommand("UPDATE_PREFS", prefs, false);
+  });
+
+  themeEl.addEventListener("change", async () => {
+    if (!themeApi?.saveThemeMode) {
+      return;
+    }
+
+    themeEl.value = await themeApi.saveThemeMode(themeEl.value);
   });
 }
 
@@ -161,10 +185,12 @@ async function sendCommand(command, extra = {}, showStatus = true) {
     if (showStatus) {
       setStatus(response.message || "Ready");
     }
+    return true;
   } catch (error) {
     if (showStatus) {
       setStatus(error.message);
     }
+    return false;
   }
 }
 

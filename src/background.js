@@ -1,6 +1,7 @@
 const CONTENT_SCRIPT_FILE = "src/content.js";
 const CONTENT_PREFS_FILE = "src/shared-prefs.js";
 const CONTENT_SNIPPETS_FILE = "src/shared-snippets.js";
+const CONTENT_THEME_FILE = "src/shared-theme.js";
 const CONTENT_STYLE_FILE = "src/content.css";
 const SNIPPETS_STORAGE_KEY = "studyReaderSnippets";
 const SNIPPETS_MESSAGE_TYPES = new Set([
@@ -142,6 +143,6 @@ async function ensureContentScript(tabId) {
 
   await chrome.scripting.executeScript({
     target: { tabId },
-    files: [CONTENT_PREFS_FILE, CONTENT_SNIPPETS_FILE, CONTENT_SCRIPT_FILE]
+    files: [CONTENT_PREFS_FILE, CONTENT_SNIPPETS_FILE, CONTENT_THEME_FILE, CONTENT_SCRIPT_FILE]
   });
 }

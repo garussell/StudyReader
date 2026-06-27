@@ -60,10 +60,11 @@
           </div>
         </div>
 
-        <div class="control-group" aria-label="Debug tools">
-          <p class="group-label">Debug</p>
+        <div class="control-group" aria-label="Reader tools">
+          <p class="group-label">Tools</p>
           <div class="control-row">
             <button id="showPreview" type="button">Show Extracted Text Preview</button>
+            <button id="showNavigator" type="button">Show Reading Navigator</button>
           </div>
         </div>
 
@@ -88,16 +89,31 @@
           </select>
         </div>
 
-        <div class="setting-group setting-group-follow" aria-label="Follow reading position">
-          <label class="toggle-label" for="followReading">
-            <span>Follow reading position</span>
-            <input id="followReading" type="checkbox" checked>
-          </label>
+        <div class="setting-group setting-group-theme" aria-label="Theme selection">
+          <label for="theme">Theme</label>
+          <select id="theme">
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
         </div>
 
-        <div class="status-group" aria-live="polite">
-          <span id="pageStatus" class="status-pill">No PDF loaded</span>
-          <span id="positionStatus" class="status-pill status-pill-muted">Ready</span>
+        <div class="control-group control-group-behavior" aria-label="Behavior settings">
+          <p class="group-label">Behavior</p>
+          <div class="toggle-list">
+            <label class="toggle-option" for="followReading">
+              <span class="toggle-option-text">Follow reading position</span>
+              <input id="followReading" type="checkbox" checked>
+            </label>
+            <label class="toggle-option" for="skipCitations">
+              <span class="toggle-option-text">Skip citations</span>
+              <input id="skipCitations" type="checkbox">
+            </label>
+          </div>
+        </div>
+
+        <div class="compact-toolbar-status" aria-live="polite">
+          <span id="compactStatus">Ready</span>
         </div>
       </section>
     </div>
@@ -131,8 +147,24 @@
       </div>
     </dialog>
 
+    <dialog id="readingNavigatorDialog" class="preview-dialog navigator-dialog">
+      <div class="preview-dialog-body navigator-dialog-body">
+        <div class="preview-dialog-header">
+          <div>
+            <h2>Reading Navigator</h2>
+            <p id="readingNavigatorMeta" class="preview-dialog-meta">No PDF loaded.</p>
+          </div>
+          <button id="closeNavigator" type="button">Close</button>
+        </div>
+        <label class="navigator-search-label" for="navigatorSearch">Search paragraphs</label>
+        <input id="navigatorSearch" class="navigator-search-input" type="search" placeholder="Filter by page or paragraph text">
+        <div id="readingNavigatorList" class="navigator-list" aria-live="polite"></div>
+      </div>
+    </dialog>
+
     <script src="shared-prefs.js"></script>
     <script src="shared-snippets.js"></script>
+    <script src="shared-theme.js"></script>
     <script type="module" src="pdf-reader.mjs"></script>
   </body>
 </html>

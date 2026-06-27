@@ -6,6 +6,7 @@
   window.__studyReaderLoaded = true;
 
   const prefsApi = globalThis.StudyReaderPrefs;
+  const themeApi = globalThis.StudyReaderTheme;
   const DEFAULT_PREFS = prefsApi?.DEFAULT_PREFS || {
     rate: 1,
     voiceName: ""
@@ -42,7 +43,8 @@
     miniButtons: {},
     miniStatusText: "Ready",
     miniPreviewText: "Select text or click a paragraph first.",
-    statusRestoreTimer: null
+    statusRestoreTimer: null,
+    resolvedTheme: "light"
   };
 
   init();
@@ -69,6 +71,12 @@
     });
 
     state.prefs = prefsApi ? await prefsApi.getPrefs() : normalizePrefs(DEFAULT_PREFS);
+    if (themeApi?.watchTheme) {
+      themeApi.watchTheme(({ resolvedTheme }) => {
+        state.resolvedTheme = resolvedTheme;
+        applyMiniPlayerTheme();
+      });
+    }
     syncMiniControlsFromPrefs();
     populateVoices();
   }
@@ -794,9 +802,18 @@
       nextParagraph: nextParagraphButton
     };
 
+    applyMiniPlayerTheme();
     syncMiniControlsFromPrefs();
     populateVoices();
     updateMiniControls();
+  }
+
+  function applyMiniPlayerTheme() {
+    if (!state.miniPlayer) {
+      return;
+    }
+
+    state.miniPlayer.dataset.theme = state.resolvedTheme || "light";
   }
 
   function makeMiniGroup(title) {
